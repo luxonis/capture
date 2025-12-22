@@ -2,6 +2,30 @@
 
 DepthAI capture script.
 
+## Setup
+
+### Create Virtual Environment
+
+**Option 1: Using Conda**
+
+```bash
+conda create -n capture python=3.11
+conda activate capture
+```
+
+**Option 2: Using Python venv**
+
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
+
+### Install Requirements
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Usage
 
 ```bash
