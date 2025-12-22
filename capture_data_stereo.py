@@ -70,6 +70,11 @@ def main(args):
         print(f"[Capture] Waiting till: {autostart_time}")
     elif autostart >= 0:
         print(f"[Capture] Capture will start automatically after {autostart} seconds")
+    else:
+        print("\n" + "="*60)
+        print("[CONTROLS] Press 'S' to START capturing")
+        print("[CONTROLS] Press 'Q' to QUIT")
+        print("="*60 + "\n")
 
     with dai.Pipeline(device) as pipeline:
         pipeline, q, input_queues = initialize_pipeline(pipeline, settings)
@@ -92,6 +97,10 @@ def main(args):
                 )
                 save = True
                 print("[Capture] Starting capture via autostart")
+                print("\n" + "="*60)
+                print("[STATUS] >>> CAPTURING... <<<")
+                print("[CONTROLS] Press 'S' to STOP, 'Q' to QUIT")
+                print("="*60 + "\n")
 
             if settings["output_settings"]["sync"]:
                 if not q['sync'].has():
@@ -113,7 +122,7 @@ def main(args):
                         np.save(f'{output_folder}/{name}_{timestamp}.npy', cvFrame)
                         num_captures += 1
                     
-                    show_stream(name, cvFrame, timestamp, mxid)
+                    show_stream(name, cvFrame, timestamp, mxid, save, num_captures)
             else:
                 for name in q.keys():
                     if not q[name].has():
@@ -132,7 +141,7 @@ def main(args):
                         np.save(f'{output_folder}/{name}_{timestamp}.npy', cvFrame)
                         num_captures += 1
                     
-                    show_stream(name, cvFrame, timestamp, mxid)
+                    show_stream(name, cvFrame, timestamp, mxid, save, num_captures)
 
             key = cv2.waitKey(1)
             if key == ord('q'):
@@ -144,11 +153,14 @@ def main(args):
                     output_folder, start_time = start_capture(
                         root_path, device, settings_path, capture_name
                     )
+                    print("[STATUS] CAPTURING...")
                 else:
+                    print("[STATUS] STOPPING CAPTURE")
                     stop_capture(start_time, num_captures, streams, pipeline)
                     break
 
             if save and check_stop_condition(wait_end, num_captures, final_num_captures, time.time()):
+                print("[STATUS] STOP CONDITION MET - STOPPING CAPTURE")
                 stop_capture(start_time, num_captures, streams, pipeline)
                 break
 

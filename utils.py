@@ -69,12 +69,30 @@ def downscale_to_fit(frame, max_width, max_height):
     return cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
 
-def show_stream(name, frame, timestamp, mxid):
-    """Display a single stream frame with timestamp."""
+def show_stream(name, frame, timestamp, mxid, is_capturing=False, num_captures=0):
+    """Display a single stream frame with timestamp and capture status."""
+    def add_status_text(img, is_capturing, num_captures):
+        h, w = img.shape[:2]
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.7
+        thickness = 2
+        
+        if is_capturing:
+            status_text = "CAPTURING..."
+            status_color = (0, 255, 0)
+            count_text = f"Frames: {num_captures}"
+            cv2.putText(img, status_text, (10, 60), font, font_scale, status_color, thickness)
+            cv2.putText(img, count_text, (10, 90), font, font_scale, (255, 255, 255), thickness)
+        else:
+            instruction_text = "Press 'S' to start capture"
+            cv2.putText(img, instruction_text, (10, 60), font, font_scale, (0, 255, 255), thickness)
+        return img
+    
     if name in ["left", "right", "rgb", "left_raw", "right_raw", "rgb_raw"]:
         frame_timestamp = frame.copy()
         frame_timestamp = cv2.putText(frame_timestamp, f"{timestamp} ms", (10, 30), 
                                      cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        frame_timestamp = add_status_text(frame_timestamp, is_capturing, num_captures)
 
         screen = screeninfo.get_monitors()[0]
         screen_width, screen_height = screen.width, screen.height
@@ -86,24 +104,14 @@ def show_stream(name, frame, timestamp, mxid):
         depth_vis = colorize_depth(frame)
         depth_vis = cv2.putText(depth_vis, f"{timestamp} ms", (10, 30), 
                                cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        depth_vis = add_status_text(depth_vis, is_capturing, num_captures)
         cv2.imshow(f"{mxid} {name}", depth_vis)
     elif name == "disparity":
         depth_vis = colorize_depth(frame, min_depth=0, max_depth=frame.max())
         depth_vis = cv2.putText(depth_vis, f"{timestamp} ms", (10, 30), 
                                cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        depth_vis = add_status_text(depth_vis, is_capturing, num_captures)
         cv2.imshow(f"{mxid} {name}", depth_vis)
-    elif name == "tof_depth":
-        max_depth = 5 * 1500
-        depth_colorized = colorize_depth(frame, min_depth=0, max_depth=max_depth)
-        depth_colorized = cv2.putText(depth_colorized, f"{timestamp} ms", (10, 30), 
-                                     cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-        cv2.imshow(f"{mxid} {name}", depth_colorized)
-    elif name == "tof_amplitude":
-        depth_vis = (frame * 255 / frame.max()).astype(np.uint8)
-        depth_vis = cv2.applyColorMap(depth_vis, cv2.COLORMAP_JET)
-        cv2.imshow(f"{mxid} {name}", depth_vis)
-    elif name == "tof_intensity":
-        cv2.imshow(f"{mxid} {name}", frame)
 
 
 def create_and_save_metadata(device, settings_path, output_dir, capture_name, date, 
