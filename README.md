@@ -37,6 +37,8 @@ python capture_data_stereo.py [--ip IP] [--settings /path/to/settings.json] [--c
 - `--ip`: Device IP address (optional, uses USB if not specified)
 - `--autostart`: Automatically start capturing after N seconds (-1 to disable)
 
+The capture will be saved in `capture/output` folder.
+
 ## Settings
 
 Edit `capture_settings.json` to configure capture parameters. To capture more frames, change:
