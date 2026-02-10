@@ -61,6 +61,7 @@ def main(args):
     if settings['num_captures'] == 'inf' or settings['num_captures'] == 'INF': 
         settings['num_captures'] = float('inf')
     final_num_captures = settings['num_captures'] * len(streams)
+    capture_limit_str = "until stopped" if settings['num_captures'] == float('inf') else f"{int(settings['num_captures'])} frames per stream"
     print(f"[Streams] Active streams: {streams}")
     print(f"[Streams] Number of streams: {len(streams)}")
     print(f"[Capture] Will capture max frames ({settings['num_captures']}) * number of streams ({len(streams)}) = {final_num_captures}")
@@ -91,7 +92,8 @@ def main(args):
 
         print("\n[Capture] Starting...")
         while pipeline.isRunning():
-            if not save and check_autostart_condition(autostart, autostart_time, initial_time, time.time()):
+            current_time = time.time()
+            if not save and check_autostart_condition(autostart, autostart_time, initial_time, current_time):
                 output_folder, start_time = start_capture(
                     root_path, device, settings_path, capture_name
                 )
@@ -101,6 +103,14 @@ def main(args):
                 print("[STATUS] >>> CAPTURING... <<<")
                 print("[CONTROLS] Press 'S' to STOP, 'Q' to QUIT")
                 print("="*60 + "\n")
+
+            if autostart >= 0 and not save:
+                if autostart_time:
+                    countdown_seconds = max(0, int(autostart_time.timestamp() - current_time))
+                else:
+                    countdown_seconds = max(0, int((initial_time + autostart) - current_time))
+            else:
+                countdown_seconds = None
 
             if settings["output_settings"]["sync"]:
                 if not q['sync'].has():
@@ -122,7 +132,7 @@ def main(args):
                         np.save(f'{output_folder}/{name}_{timestamp}.npy', cvFrame)
                         num_captures += 1
                     
-                    show_stream(name, cvFrame, timestamp, mxid, save, num_captures)
+                    show_stream(name, cvFrame, timestamp, mxid, save, num_captures, capture_limit_str, countdown_seconds)
             else:
                 for name in q.keys():
                     if not q[name].has():
@@ -141,7 +151,7 @@ def main(args):
                         np.save(f'{output_folder}/{name}_{timestamp}.npy', cvFrame)
                         num_captures += 1
                     
-                    show_stream(name, cvFrame, timestamp, mxid, save, num_captures)
+                    show_stream(name, cvFrame, timestamp, mxid, save, num_captures, capture_limit_str, countdown_seconds)
 
             key = cv2.waitKey(1)
             if key == ord('q'):

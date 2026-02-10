@@ -69,49 +69,64 @@ def downscale_to_fit(frame, max_width, max_height):
     return cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
 
-def show_stream(name, frame, timestamp, mxid, is_capturing=False, num_captures=0):
+def show_stream(name, frame, timestamp, mxid, is_capturing=False, num_captures=0, capture_limit_str=None, countdown_seconds=None):
     """Display a single stream frame with timestamp and capture status."""
-    def add_status_text(img, is_capturing, num_captures):
+    def add_status_text(img, is_capturing, num_captures, capture_limit_str, countdown_seconds):
         h, w = img.shape[:2]
         font = cv2.FONT_HERSHEY_SIMPLEX
         font_scale = 0.7
         thickness = 2
-        
+        is_grayscale = img.ndim == 2
+        white = 255 if is_grayscale else (255, 255, 255)
+        yellow = 255 if is_grayscale else (0, 255, 255)
+        y = 60
+        if capture_limit_str:
+            limit_text = f"Capture: {capture_limit_str}"
+            cv2.putText(img, limit_text, (10, y), font, font_scale, white, thickness)
+            y += 30
+        if countdown_seconds is not None:
+            countdown_text = f"Starting capture in {countdown_seconds} s"
+            cv2.putText(img, countdown_text, (10, y), font, font_scale, yellow, thickness)
+            y += 30
         if is_capturing:
             status_text = "CAPTURING..."
-            status_color = (0, 255, 0)
             count_text = f"Frames: {num_captures}"
-            cv2.putText(img, status_text, (10, 60), font, font_scale, status_color, thickness)
-            cv2.putText(img, count_text, (10, 90), font, font_scale, (255, 255, 255), thickness)
+            cv2.putText(img, status_text, (10, y), font, font_scale, white, thickness)
+            cv2.putText(img, count_text, (10, y + 30), font, font_scale, white, thickness)
         else:
-            instruction_text = "Press 'S' to start capture"
-            cv2.putText(img, instruction_text, (10, 60), font, font_scale, (0, 255, 255), thickness)
+            if countdown_seconds is None:
+                instruction_text = "Press 'S' to start capture"
+                cv2.putText(img, instruction_text, (10, y), font, font_scale, yellow, thickness)
         return img
+
+    res_w, res_h = frame.shape[1], frame.shape[0]
+    window_title = f"{mxid} {name} {res_w}x{res_h}"
     
     if name in ["left", "right", "rgb", "left_raw", "right_raw", "rgb_raw"]:
         frame_timestamp = frame.copy()
+        ts_color = 255 if frame.ndim == 2 else (255, 255, 255)
         frame_timestamp = cv2.putText(frame_timestamp, f"{timestamp} ms", (10, 30), 
-                                     cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-        frame_timestamp = add_status_text(frame_timestamp, is_capturing, num_captures)
+                                     cv2.FONT_HERSHEY_SIMPLEX, 1, ts_color, 2)
+        frame_timestamp = add_status_text(frame_timestamp, is_capturing, num_captures, capture_limit_str, countdown_seconds)
 
         screen = screeninfo.get_monitors()[0]
         screen_width, screen_height = screen.width, screen.height
         h, w = frame_timestamp.shape[:2]
         if h > screen_height or w > screen_width:
             frame_timestamp = downscale_to_fit(frame_timestamp, screen_width, screen_height)
-        cv2.imshow(f"{mxid} {name}", frame_timestamp)
+        cv2.imshow(window_title, frame_timestamp)
     elif name == "depth":
         depth_vis = colorize_depth(frame)
         depth_vis = cv2.putText(depth_vis, f"{timestamp} ms", (10, 30), 
                                cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-        depth_vis = add_status_text(depth_vis, is_capturing, num_captures)
-        cv2.imshow(f"{mxid} {name}", depth_vis)
+        depth_vis = add_status_text(depth_vis, is_capturing, num_captures, capture_limit_str, countdown_seconds)
+        cv2.imshow(window_title, depth_vis)
     elif name == "disparity":
         depth_vis = colorize_depth(frame, min_depth=0, max_depth=frame.max())
         depth_vis = cv2.putText(depth_vis, f"{timestamp} ms", (10, 30), 
                                cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-        depth_vis = add_status_text(depth_vis, is_capturing, num_captures)
-        cv2.imshow(f"{mxid} {name}", depth_vis)
+        depth_vis = add_status_text(depth_vis, is_capturing, num_captures, capture_limit_str, countdown_seconds)
+        cv2.imshow(window_title, depth_vis)
 
 
 def create_and_save_metadata(device, settings_path, output_dir, capture_name, date, 
