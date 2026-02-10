@@ -1,5 +1,6 @@
 import depthai as dai
 from stereo import setup_stereo
+from metadata_extraction import extract_stereo_settings_from_node
 
 
 def initialize_pipeline(pipeline, settings):
@@ -33,8 +34,11 @@ def initialize_pipeline(pipeline, settings):
     if output_settings["right"] or output_settings["right_raw"]: 
         input_queues["right_input_control"] = monoRight.inputControl.createInputQueue()
 
+    stereo_settings = None
     if output_settings.get('hw_sync', False) or output_settings["depth"] or output_settings["disparity"]:
-        stereo = setup_stereo(pipeline, settings)
+        platform = pipeline.getDefaultDevice().getPlatform()
+        stereo = setup_stereo(pipeline, settings, platform)
+        stereo_settings = extract_stereo_settings_from_node(stereo)
         monoLeftOut.link(stereo.left)
         monoRightOut.link(stereo.right)
 
@@ -95,5 +99,5 @@ def initialize_pipeline(pipeline, settings):
         if output_settings.get("rgb_raw", False):
             raise NotImplementedError("RGB raw frames not implemented")
 
-    return pipeline, queues, input_queues
+    return pipeline, queues, input_queues, stereo_settings
 

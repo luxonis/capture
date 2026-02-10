@@ -78,7 +78,7 @@ def main(args):
         print("="*60 + "\n")
 
     with dai.Pipeline(device) as pipeline:
-        pipeline, q, input_queues = initialize_pipeline(pipeline, settings)
+        pipeline, q, input_queues, stereo_settings = initialize_pipeline(pipeline, settings)
         pipeline.start()
 
         platform = pipeline.getDefaultDevice().getPlatform()
@@ -95,7 +95,7 @@ def main(args):
             current_time = time.time()
             if not save and check_autostart_condition(autostart, autostart_time, initial_time, current_time):
                 output_folder, start_time = start_capture(
-                    root_path, device, settings_path, capture_name
+                    root_path, device, settings_path, capture_name, stereo_settings
                 )
                 save = True
                 print("[Capture] Starting capture via autostart")
@@ -161,7 +161,7 @@ def main(args):
                 save = not save
                 if save:
                     output_folder, start_time = start_capture(
-                        root_path, device, settings_path, capture_name
+                        root_path, device, settings_path, capture_name, stereo_settings
                     )
                     print("[STATUS] CAPTURING...")
                 else:

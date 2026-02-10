@@ -9,6 +9,7 @@ import argparse
 import screeninfo
 
 
+
 def unpackRaw10(rawData, width, height, stride=None):
     """
     Unpacks RAW10 data from DepthAI pipeline into a 16-bit grayscale array.
@@ -129,22 +130,27 @@ def show_stream(name, frame, timestamp, mxid, is_capturing=False, num_captures=0
         cv2.imshow(window_title, depth_vis)
 
 
-def create_and_save_metadata(device, settings_path, output_dir, capture_name, date, 
-                            capture_type=None, author=None, notes=None):
+def create_and_save_metadata(device, settings_path, output_dir, capture_name, date,
+                            capture_type=None, author=None, notes=None, stereo_settings=None):
     model_name = device.getDeviceName()
     mxId = device.getMxId()
+    platform = device.getPlatform().name
+    settings = json.load(open(settings_path))
     metadata = {
         "model_name": model_name,
         "mxId": mxId,
+        "dai_version": dai.__version__,
+        "platform": platform,
         "capture_type": capture_type,
         "capture_name": capture_name,
         "date": date,
         "notes": notes,
         "author": author,
-        'settings_name': settings_path,
-        "settings": json.load(open(settings_path)),
-        "dai_version": dai.__version__,
+        "settings_name": settings_path,
+        "settings": settings,
     }
+    if stereo_settings is not None:
+        metadata["stereo_settings"] = stereo_settings
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -157,16 +163,16 @@ def create_and_save_metadata(device, settings_path, output_dir, capture_name, da
     print(f"[Capture] Metadata saved to {filepath}")
 
 
-def initialize_capture(root_path, device, settings_path, capture_name=None, projector=None):
+def initialize_capture(root_path, device, settings_path, capture_name=None, projector=None, stereo_settings=None):
     date = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
     device_name = device.getDeviceName()
     device_id = device.getMxId()
-    
+
     if capture_name:
         base_name = f"{device_name}_{device_id}_{capture_name}_{date}"
     else:
         base_name = f"{device_name}_{device_id}_{date}"
-    
+
     if projector is None:
         out_dir = f"{root_path}/{base_name}"
     else:
@@ -183,7 +189,7 @@ def initialize_capture(root_path, device, settings_path, capture_name=None, proj
 
     calib = device.readCalibration()
     calib.eepromToJsonFile(f'{out_dir}/calib.json')
-    create_and_save_metadata(device, settings_path, out_dir, capture_name, date)
+    create_and_save_metadata(device, settings_path, out_dir, capture_name, date, stereo_settings=stereo_settings)
 
     return out_dir
 
@@ -244,7 +250,7 @@ def check_autostart_condition(autostart, autostart_time, initial_time, current_t
         return current_time >= (initial_time + autostart)
 
 
-def start_capture(root_path, device, settings_path, capture_name=None):
+def start_capture(root_path, device, settings_path, capture_name=None, stereo_settings=None):
     """
     Start a new capture session.
 
@@ -252,9 +258,10 @@ def start_capture(root_path, device, settings_path, capture_name=None):
     :param device: DepthAI device
     :param settings_path: Path to settings file
     :param capture_name: Optional name for the capture (will be included in folder name and metadata)
+    :param stereo_settings: Optional pre-extracted stereo config dict (from pipeline at startup)
     :return: Tuple of (output_folder, start_time)
     """
-    output_folder = initialize_capture(root_path, device, settings_path, capture_name)
+    output_folder = initialize_capture(root_path, device, settings_path, capture_name, stereo_settings=stereo_settings)
     start_time = time.time()
     print("[Capture] Starting capture")
     return output_folder, start_time
