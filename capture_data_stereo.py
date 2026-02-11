@@ -32,6 +32,8 @@ def parse_arguments(root_path):
                        help="Select a fixed time for capture to end")
     parser.add_argument("--capture-name", default=None, dest="capture_name",
                        help="Optional name for the capture (will be included in folder name)")
+    parser.add_argument("--no-streams", action="store_true",
+                       help="Do not show stream windows (faster capture); use control window for S/Q")
     return parser.parse_args()
 
 def main(args):
@@ -76,6 +78,10 @@ def main(args):
         print("[CONTROLS] Press 'S' to START capturing")
         print("[CONTROLS] Press 'Q' to QUIT")
         print("="*60 + "\n")
+
+    no_streams = getattr(args, 'no_streams', False)
+    if no_streams:
+        cv2.namedWindow(CONTROL_WINDOW_NAME)
 
     with dai.Pipeline(device) as pipeline:
         pipeline, q, input_queues, stereo_settings = initialize_pipeline(pipeline, settings)
@@ -132,7 +138,10 @@ def main(args):
                         np.save(f'{output_folder}/{name}_{timestamp}.npy', cvFrame)
                         num_captures += 1
                     
-                    show_stream(name, cvFrame, timestamp, mxid, save, num_captures, capture_limit_str, countdown_seconds)
+                    if not no_streams:
+                        show_stream(name, cvFrame, timestamp, mxid, save, num_captures, capture_limit_str, countdown_seconds)
+                if no_streams:
+                    update_control_window(save, num_captures, capture_limit_str, countdown_seconds)
             else:
                 for name in q.keys():
                     if not q[name].has():
@@ -151,7 +160,10 @@ def main(args):
                         np.save(f'{output_folder}/{name}_{timestamp}.npy', cvFrame)
                         num_captures += 1
                     
-                    show_stream(name, cvFrame, timestamp, mxid, save, num_captures, capture_limit_str, countdown_seconds)
+                    if not no_streams:
+                        show_stream(name, cvFrame, timestamp, mxid, save, num_captures, capture_limit_str, countdown_seconds)
+                if no_streams:
+                    update_control_window(save, num_captures, capture_limit_str, countdown_seconds)
 
             key = cv2.waitKey(1)
             if key == ord('q'):

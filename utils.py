@@ -70,6 +70,34 @@ def downscale_to_fit(frame, max_width, max_height):
     return cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
 
+CONTROL_WINDOW_NAME = "Capture control"
+
+
+def update_control_window(is_capturing, num_captures, capture_limit_str=None, countdown_seconds=None):
+    """Update the small control window used when streams are not displayed."""
+    h, w = 180, 420
+    img = np.zeros((h, w, 3), dtype=np.uint8)
+    img[:] = (40, 40, 40)
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    y = 35
+    if capture_limit_str:
+        cv2.putText(img, f"Limit: {capture_limit_str}", (10, y), font, 0.5, (200, 200, 200), 1)
+        y += 28
+    if countdown_seconds is not None:
+        cv2.putText(img, f"Starting in {countdown_seconds} s", (10, y), font, 0.5, (0, 255, 255), 1)
+        y += 28
+    if is_capturing:
+        cv2.putText(img, "CAPTURING...", (10, y), font, 0.6, (0, 255, 0), 2)
+        cv2.putText(img, f"Frames: {num_captures}", (10, y + 28), font, 0.5, (255, 255, 255), 1)
+        y += 56
+    else:
+        if countdown_seconds is None:
+            cv2.putText(img, "Press S to START capture", (10, y), font, 0.5, (0, 255, 255), 1)
+        y += 28
+    cv2.putText(img, "Press Q to QUIT", (10, h - 15), font, 0.5, (180, 180, 180), 1)
+    cv2.imshow(CONTROL_WINDOW_NAME, img)
+
+
 def show_stream(name, frame, timestamp, mxid, is_capturing=False, num_captures=0, capture_limit_str=None, countdown_seconds=None):
     """Display a single stream frame with timestamp and capture status."""
     def add_status_text(img, is_capturing, num_captures, capture_limit_str, countdown_seconds):
