@@ -1,6 +1,11 @@
 # Stereo Capture Tool
 
-DepthAI capture script.
+DepthAI capture script for stereo (and optionally RGB/depth) streams from OAK devices. Saves frames as `.npy` files with timestamps and optional calibration/metadata.
+
+## Requirements
+
+- DepthAI-compatible device (OAK camera) connected via USB or network
+- Python 3.9+
 
 ## Setup
 
@@ -29,28 +34,36 @@ pip install -r requirements.txt
 ## Usage
 
 ```bash
-python capture_data_stereo.py [--ip IP] [--settings /path/to/settings.json] [--capture-name NAME]
+python capture_data_stereo.py [OPTIONS]
 ```
 
-- `--settings`: Path to settings JSON file (default: `capture_settings.json`)
-- `--capture-name`: Optional name for the capture (will be included in folder name and metadata)
-- `--ip`: Device IP address (optional, uses USB if not specified)
-- `--autostart`: Automatically start capturing after N seconds (-1 to disable)
+**Options**
 
-The capture will be saved in `capture/output` folder.
+| Option | Description |
+|--------|-------------|
+| `--settings` | Path to settings JSON (default: `capture_settings.json`) |
+| `--output` | Custom output root folder (default: `output` next to the script) |
+| `--capture-name` | Name for the capture (included in folder name and metadata) |
+| `--ip` | Device IP for network connection (omit for USB) |
+| `--autostart` | Start capturing after N seconds (`-1` = disabled, default) |
+| `--autostart_time` | Start at a fixed datetime (e.g. from cron) |
+| `--autostart_end` | Stop at a fixed datetime |
+
+Captures are saved under the output folder in subfolders named by device, optional capture name, and timestamp (e.g. `output/OAK-D_abc123_myrun_20250211120000/`). Each stream is saved as `{stream}_{timestamp_ms}.npy`; calibration and metadata are written in the same folder.
 
 ## Settings
 
-Edit `capture_settings.json` to configure capture parameters. To capture more frames, change:
+Edit `capture_settings.json` to configure the pipeline and capture.
 
-```json
-"num_captures": 20
-```
-
-to a higher number (or use `"inf"` for unlimited capture).
+- **num_captures**: Max frames per stream (`20`, or `"inf"` for unlimited).
+- **output_settings**: Enable/disable streams: `left`, `right`, `left_raw`, `right_raw`, `rgb`, `depth`, `disparity`; select `sync` for synchronized capture.
+- **stereoResolution** / **rgbResolution**: `{"x": width, "y": height}`.
+- **ir** / **ir_value**: IR laser dot projector (0–1).
+- **flood_light** / **flood_light_intensity**: IR flood light.
+- **FPS**: Target FPS.
 
 ## Controls
 
-- `s`: Start/stop capture
-- `q`: Quit
+- **s**: Start or stop capture
+- **q**: Quit
 
