@@ -7,9 +7,31 @@ import json
 import cv2
 import os
 import argparse
+import queue
+import threading
 
 from utils import *
 from pipeline import initialize_pipeline
+
+SAVE_QUEUE_MAXSIZE = 200  # max frames buffered for saving; when full, capture blocks until the saver catches up
+
+
+def _saver_worker(save_queue):
+    while True:
+        try:
+            item = save_queue.get(timeout=0.5)
+        except queue.Empty:
+            continue
+        if item is None:
+            save_queue.task_done()
+            break
+        output_folder, name, timestamp, frame, do_npy, do_png = item
+        try:
+            if do_npy: np.save(f'{output_folder}/{name}_{timestamp}.npy', frame)
+            if do_png: cv2.imwrite(f'{output_folder}/{name}_{timestamp}.png', frame)
+        finally:
+            del frame
+        save_queue.task_done()
 
 print(f"[System] DepthAI version: {dai.__version__}")
 
@@ -87,6 +109,9 @@ def main(args):
     save_npy = args.npy or not args.png
     save_png = args.png
     png_streams = ('left', 'right', 'rgb')
+    save_queue = queue.Queue(maxsize=SAVE_QUEUE_MAXSIZE)
+    saver_thread = threading.Thread(target=_saver_worker, args=(save_queue,), daemon=False)
+    saver_thread.start()
     if no_streams:
         cv2.namedWindow(CONTROL_WINDOW_NAME)
 
@@ -142,10 +167,12 @@ def main(args):
                         if name in ['left', 'right']:
                             if len(cvFrame.shape) == 3:
                                 cvFrame = cv2.cvtColor(cvFrame, cv2.COLOR_BGR2GRAY)
-                        if save_npy:
-                            np.save(f'{output_folder}/{name}_{timestamp}.npy', cvFrame)
-                        if save_png and name in png_streams:
-                            cv2.imwrite(f'{output_folder}/{name}_{timestamp}.png', cvFrame)
+                        do_png = save_png and name in png_streams
+                        if save_npy or do_png:
+                            save_queue.put(
+                                (output_folder, name, timestamp, cvFrame.copy(), save_npy, do_png),
+                                block=True
+                            )
                         num_captures += 1
                     
                     if not no_streams:
@@ -167,10 +194,12 @@ def main(args):
                         if name in ['left', 'right']:
                             if len(cvFrame.shape) == 3:
                                 cvFrame = cv2.cvtColor(cvFrame, cv2.COLOR_BGR2GRAY)
-                        if save_npy:
-                            np.save(f'{output_folder}/{name}_{timestamp}.npy', cvFrame)
-                        if save_png and name in png_streams:
-                            cv2.imwrite(f'{output_folder}/{name}_{timestamp}.png', cvFrame)
+                        do_png = save_png and name in png_streams
+                        if save_npy or do_png:
+                            save_queue.put(
+                                (output_folder, name, timestamp, cvFrame.copy(), save_npy, do_png),
+                                block=True
+                            )
                         num_captures += 1
                     
                     if not no_streams:
@@ -198,6 +227,11 @@ def main(args):
                 print("[STATUS] STOP CONDITION MET - STOPPING CAPTURE")
                 stop_capture(start_time, num_captures, streams, pipeline)
                 break
+
+    save_queue.put(None)
+    saver_thread.join(timeout=60)
+    if saver_thread.is_alive():
+        print("[Capture] Warning: saver thread did not finish in time")
 
 
 if __name__ == "__main__":
