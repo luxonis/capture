@@ -34,6 +34,10 @@ def parse_arguments(root_path):
                        help="Optional name for the capture (will be included in folder name)")
     parser.add_argument("--no-streams", action="store_true",
                        help="Do not show stream windows (faster capture); use control window for S/Q")
+    parser.add_argument("--png", action="store_true",
+                       help="Save left, right, rgb as PNG (disables npy unless --npy is also set)")
+    parser.add_argument("--npy", action="store_true",
+                       help="Save frames as numpy (default when no format option is set)")
     return parser.parse_args()
 
 def main(args):
@@ -80,6 +84,9 @@ def main(args):
         print("="*60 + "\n")
 
     no_streams = getattr(args, 'no_streams', False)
+    save_npy = args.npy or not args.png
+    save_png = args.png
+    png_streams = ('left', 'right', 'rgb')
     if no_streams:
         cv2.namedWindow(CONTROL_WINDOW_NAME)
 
@@ -135,7 +142,10 @@ def main(args):
                         if name in ['left', 'right']:
                             if len(cvFrame.shape) == 3:
                                 cvFrame = cv2.cvtColor(cvFrame, cv2.COLOR_BGR2GRAY)
-                        np.save(f'{output_folder}/{name}_{timestamp}.npy', cvFrame)
+                        if save_npy:
+                            np.save(f'{output_folder}/{name}_{timestamp}.npy', cvFrame)
+                        if save_png and name in png_streams:
+                            cv2.imwrite(f'{output_folder}/{name}_{timestamp}.png', cvFrame)
                         num_captures += 1
                     
                     if not no_streams:
@@ -157,7 +167,10 @@ def main(args):
                         if name in ['left', 'right']:
                             if len(cvFrame.shape) == 3:
                                 cvFrame = cv2.cvtColor(cvFrame, cv2.COLOR_BGR2GRAY)
-                        np.save(f'{output_folder}/{name}_{timestamp}.npy', cvFrame)
+                        if save_npy:
+                            np.save(f'{output_folder}/{name}_{timestamp}.npy', cvFrame)
+                        if save_png and name in png_streams:
+                            cv2.imwrite(f'{output_folder}/{name}_{timestamp}.png', cvFrame)
                         num_captures += 1
                     
                     if not no_streams:

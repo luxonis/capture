@@ -49,8 +49,10 @@ python capture_data_stereo.py [OPTIONS]
 | `--autostart_time` | Start at a fixed datetime (e.g. from cron) |
 | `--autostart_end` | Stop at a fixed datetime |
 | `--no-streams` | Do not show stream windows; use control window for S/Q (faster capture) |
+| `--png` | Save left, right, rgb as PNG (disables npy unless `--npy` is also set) |
+| `--npy` | Save frames as numpy (default when no format option is set). Use with `--png` to save both. |
 
-Captures are saved under the output folder in subfolders named by device, optional capture name, and timestamp (e.g. `output/OAK-D_abc123_myrun_20250211120000/`). Each stream is saved as `{stream}_{timestamp_ms}.npy`; calibration and metadata are written in the same folder.
+Captures are saved under the output folder in subfolders named by device, optional capture name, and timestamp (e.g. `output/OAK-D_abc123_myrun_20250211120000/`). By default each stream is saved as `{stream}_{timestamp_ms}.npy`. With `--png`, left/right/rgb are saved as `.png`; with both `--png` and `--npy`, those streams are saved in both formats. Calibration and metadata are written in the same folder.
 
 ## Settings
 
