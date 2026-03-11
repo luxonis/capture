@@ -1,5 +1,5 @@
 {
-    "ir": true,
+    "ir": false,
     "ir_value": 0.8,
     "flood_light": false,
     "flood_light_intensity": 1,
@@ -25,7 +25,7 @@
         "right": true,
         "right_raw": false,
         "rgb": true,
-        "depth": true,
+        "depth": false,
         "disparity": false,
         "hw_sync": false,
         "sync": true
@@ -34,6 +34,12 @@
     "extendedDisparity": true,
 
     "FPS": 30,
-    "num_captures": 20
+    "num_captures": 10000,
+
+    "imu_settings": {
+        "frequency": 100,
+        "batch_report_threshold": 1,
+        "max_batch_reports": 10
+    }
 }
 
