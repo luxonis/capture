@@ -120,6 +120,7 @@ def parse_arguments(root_path):
 
 
 def main(args):
+    output_root = args.output
     settings_path, ip, autostart, autostart_time, wait_end, capture_name = process_argument_logic(args)
     print(f"[Device] Connecting to device... IP: {ip}")
 
@@ -219,7 +220,7 @@ def main(args):
             current_time = time.time()
             if not save and check_autostart_condition(autostart, autostart_time, initial_time, current_time):
                 output_folder, start_time = start_capture(
-                    root_path, device, settings_path, capture_name, stereo_settings
+                    output_root, device, settings_path, capture_name, stereo_settings
                 )
                 _save_imu_sensor_to_metadata(output_folder, imu_sensor_name)
                 save = True
@@ -307,7 +308,7 @@ def main(args):
                 save = not save
                 if save:
                     output_folder, start_time = start_capture(
-                        root_path, device, settings_path, capture_name, stereo_settings
+                        output_root, device, settings_path, capture_name, stereo_settings
                     )
                     _save_imu_sensor_to_metadata(output_folder, imu_sensor_name)
                     # Clear any pre-capture IMU data accumulated during warmup

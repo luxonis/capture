@@ -38,8 +38,8 @@
 
     "imu_settings": {
         "frequency": 100,
-        "batch_report_threshold": 1,
-        "max_batch_reports": 10
+        "batch_report_threshold": 20,
+        "max_batch_reports": 20
     }
 }
 
