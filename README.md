@@ -51,6 +51,24 @@ python capture_data_stereo.py [OPTIONS]
 | `--no-streams` | Do not show stream windows; use control window for S/Q (faster capture) |
 | `--png` | Save left, right, rgb as PNG (disables npy unless `--npy` is also set) |
 | `--npy` | Save frames as numpy (default when no format option is set). Use with `--png` to save both. |
+| `--save-sensor-info` | Fetch sensor metadata via SSH and copy into each capture folder (RVC4 only; requires raw streams and `--ip`). Run **before** the pipeline starts so the camera is free. |
+| `--root-password` | SSH password for device when using `--save-sensor-info` (empty for key auth) |
+
+To test sensor metadata capture without running the main capture script (e.g. to debug), use the script in the `sensor/` folder:
+
+```bash
+python -m sensor.test_sensor <device_ip> --password <ssh_password> [--output /tmp/sensor_test]
+```
+
+Optional: `--short-timeout`, `--camera 0`. Set `SENSOR_METADATA_DEBUG=1` to log device output.
+
+To inspect metadata embedded in a saved sensor JPEG (EXIF, etc.):
+
+```bash
+python -m sensor.check_metadata path/to/sensor_metadata.jpg
+```
+
+Use `--raw` to show all tag numbers. For vendor-specific tuning metadata, `exiftool path/to/sensor_metadata.jpg` may show more.
 
 Captures are saved under the output folder in subfolders named by device, optional capture name, and timestamp (e.g. `output/OAK-D_abc123_myrun_20250211120000/`). By default each stream is saved as `{stream}_{timestamp_ms}.npy`. With `--png`, left/right/rgb are saved as `.png`; with both `--png` and `--npy`, those streams are saved in both formats. Calibration and metadata are written in the same folder.
 

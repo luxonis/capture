@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import sys
 import depthai as dai
 import numpy as np
 import time
@@ -60,25 +61,85 @@ def parse_arguments(root_path):
                        help="Save left, right, rgb as PNG (disables npy unless --npy is also set)")
     parser.add_argument("--npy", action="store_true",
                        help="Save frames as numpy (default when no format option is set)")
+    parser.add_argument("--save-sensor-info", action="store_true", dest="save_sensor_info",
+                       help="Save sensor metadata via SSH (requires raw streams and --ip)")
+    parser.add_argument("--root-password", default="", dest="root_password",
+                       help="SSH password for device when using --save-sensor-info (empty for key auth)")
     return parser.parse_args()
 
 def main(args):
     settings_path, ip, autostart, autostart_time, wait_end, capture_name = process_argument_logic(args)
-    print(f"[Device] Connecting to device... IP: {ip}")
 
-    if ip is not None: 
+    with open(settings_path) as settings_file:
+        settings = json.load(settings_file)
+
+    if getattr(args, 'save_sensor_info', False):
+        saves_raw = (
+            settings.get("output_settings", {}).get("left_raw", False) or
+            settings.get("output_settings", {}).get("right_raw", False)
+        )
+        if not saves_raw:
+            print("Error: --save-sensor-info requires raw streams. Enable left_raw or right_raw in capture_settings.json.", file=sys.stderr)
+            sys.exit(1)
+        if ip is None:
+            print("Error: --save-sensor-info requires --ip (device address for SSH).", file=sys.stderr)
+            sys.exit(1)
+
+    pre_captured_sensor_metadata_path = None
+    if getattr(args, 'save_sensor_info', False):
+        import tempfile
+        import shutil
+        tmpdir = tempfile.mkdtemp(prefix="capture_sensor_metadata_")
+        print("[Capture] Fetching sensor metadata via SSH (before connecting to device so camera is free) ...")
+        def _try_sensor_metadata(gst_cmd=None):
+            from sensor import save_sensor_metadata
+            save_sensor_metadata(
+                host=ip,
+                output_folder=tmpdir,
+                user="root",
+                password=getattr(args, 'root_password', ''),
+                port=22,
+                remote_file="/data/capture/frame19.jpg",
+                local_filename="sensor_metadata.jpg",
+                gst_cmd=gst_cmd,
+            )
+        try:
+            _try_sensor_metadata(gst_cmd=None)
+            pre_captured_sensor_metadata_path = os.path.join(tmpdir, "sensor_metadata.jpg")
+        except Exception as e:
+            err = str(e)
+            if "SSH connection closed" in err or "Permission denied" in err or "login timed out" in err or "EOF" in err:
+                print(f"[Capture] Sensor metadata failed: {e}", file=sys.stderr)
+                shutil.rmtree(tmpdir, ignore_errors=True)
+                sys.exit(1)
+            if ("qmmfsrc" in err or "assertion" in err or "Segmentation fault" in err) and "camera=0" not in err:
+                print("[Capture] Sensor metadata failed (qmmfsrc crash), retrying with camera=0 ...")
+                try:
+                    from sensor import DEFAULT_GST_CMD
+                    _try_sensor_metadata(gst_cmd=DEFAULT_GST_CMD.replace("camera=1", "camera=0"))
+                    pre_captured_sensor_metadata_path = os.path.join(tmpdir, "sensor_metadata.jpg")
+                except Exception as e2:
+                    print(f"[Capture] Sensor metadata failed (QMMF init): {e2}", file=sys.stderr)
+                    shutil.rmtree(tmpdir, ignore_errors=True)
+                    sys.exit(1)
+            else:
+                print(f"[Capture] Sensor metadata failed: {e}", file=sys.stderr)
+                shutil.rmtree(tmpdir, ignore_errors=True)
+                sys.exit(1)
+        if getattr(args, 'save_sensor_info', False) and pre_captured_sensor_metadata_path is None:
+            print("[Capture] Sensor metadata was requested but could not be obtained.", file=sys.stderr)
+            sys.exit(1)
+
+    print(f"[Device] Connecting to device... IP: {ip}")
+    if ip is not None:
         device = dai.Device(ip)
-    else: 
+    else:
         device = dai.Device()
     mxid = device.getDeviceId()
-
     device_name = device.getDeviceName()
     print("[Device] Device connected! ")
     print(f"[Device] Device Name: {device_name}")
     print(f"[Device] Device ID: {mxid}")
-
-    with open(settings_path) as settings_file:
-        settings = json.load(settings_file)
 
     output_folder = None
     num_captures = 0
@@ -112,6 +173,7 @@ def main(args):
     save_queue = queue.Queue(maxsize=SAVE_QUEUE_MAXSIZE)
     saver_thread = threading.Thread(target=_saver_worker, args=(save_queue,), daemon=False)
     saver_thread.start()
+
     if no_streams:
         cv2.namedWindow(CONTROL_WINDOW_NAME)
 
@@ -133,7 +195,8 @@ def main(args):
             current_time = time.time()
             if not save and check_autostart_condition(autostart, autostart_time, initial_time, current_time):
                 output_folder, start_time = start_capture(
-                    root_path, device, settings_path, capture_name, stereo_settings
+                    root_path, device, settings_path, capture_name, stereo_settings,
+                    sensor_metadata_path=pre_captured_sensor_metadata_path,
                 )
                 save = True
                 print("[Capture] Starting capture via autostart")
@@ -215,7 +278,8 @@ def main(args):
                 save = not save
                 if save:
                     output_folder, start_time = start_capture(
-                        root_path, device, settings_path, capture_name, stereo_settings
+                        root_path, device, settings_path, capture_name, stereo_settings,
+                        sensor_metadata_path=pre_captured_sensor_metadata_path,
                     )
                     print("[STATUS] CAPTURING...")
                 else:

@@ -72,7 +72,6 @@ def downscale_to_fit(frame, max_width, max_height):
 
 CONTROL_WINDOW_NAME = "Capture control"
 
-
 def update_control_window(is_capturing, num_captures, capture_limit_str=None, countdown_seconds=None):
     """Update the small control window used when streams are not displayed."""
     h, w = 180, 420
@@ -191,7 +190,7 @@ def create_and_save_metadata(device, settings_path, output_dir, capture_name, da
     print(f"[Capture] Metadata saved to {filepath}")
 
 
-def initialize_capture(root_path, device, settings_path, capture_name=None, projector=None, stereo_settings=None):
+def initialize_capture(root_path, device, settings_path, capture_name=None, projector=None, stereo_settings=None, sensor_metadata_path=None):
     date = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
     device_name = device.getDeviceName()
     device_id = device.getMxId()
@@ -218,6 +217,12 @@ def initialize_capture(root_path, device, settings_path, capture_name=None, proj
     calib = device.readCalibration()
     calib.eepromToJsonFile(f'{out_dir}/calib.json')
     create_and_save_metadata(device, settings_path, out_dir, capture_name, date, stereo_settings=stereo_settings)
+
+    if sensor_metadata_path and os.path.isfile(sensor_metadata_path):
+        import shutil
+        dest = os.path.join(out_dir, "sensor_metadata.jpg")
+        shutil.copy2(sensor_metadata_path, dest)
+        print(f"[Capture] Sensor metadata copied to {dest}")
 
     return out_dir
 
@@ -278,7 +283,7 @@ def check_autostart_condition(autostart, autostart_time, initial_time, current_t
         return current_time >= (initial_time + autostart)
 
 
-def start_capture(root_path, device, settings_path, capture_name=None, stereo_settings=None):
+def start_capture(root_path, device, settings_path, capture_name=None, stereo_settings=None, sensor_metadata_path=None):
     """
     Start a new capture session.
 
@@ -287,9 +292,10 @@ def start_capture(root_path, device, settings_path, capture_name=None, stereo_se
     :param settings_path: Path to settings file
     :param capture_name: Optional name for the capture (will be included in folder name and metadata)
     :param stereo_settings: Optional pre-extracted stereo config dict (from pipeline at startup)
+    :param sensor_metadata_path: Path to pre-captured sensor_metadata.jpg (from --save-sensor-info, run before pipeline)
     :return: Tuple of (output_folder, start_time)
     """
-    output_folder = initialize_capture(root_path, device, settings_path, capture_name, stereo_settings=stereo_settings)
+    output_folder = initialize_capture(root_path, device, settings_path, capture_name, stereo_settings=stereo_settings, sensor_metadata_path=sensor_metadata_path)
     start_time = time.time()
     print("[Capture] Starting capture")
     return output_folder, start_time
