@@ -1,239 +1,242 @@
 #!/usr/bin/env python3
+"""
+Stereo capture using holistic recording (lossless FFV1/AVI).
+
+Records left (CAM_B), right (CAM_C), optionally RGB (CAM_A), and IMU streams.
+Calibration is saved automatically as camera_info.json inside the recording.
+Recording starts when the pipeline starts; press Q to stop.
+
+Usage:
+    python capture_data_stereo.py
+    python capture_data_stereo.py --settings my_settings.json --output /path/to/output
+    python capture_data_stereo.py --ip 10.11.0.42 --capture-name test-scene
+    python capture_data_stereo.py --no-streams --num-frames 100
+"""
 
 import depthai as dai
-import numpy as np
 import time
 import json
 import cv2
 import os
 import argparse
-import queue
-import threading
+import datetime
 
-from utils import *
-from pipeline import initialize_pipeline
-
-SAVE_QUEUE_MAXSIZE = 200  # max frames buffered for saving; when full, capture blocks until the saver catches up
-
-
-def _saver_worker(save_queue):
-    while True:
-        try:
-            item = save_queue.get(timeout=0.5)
-        except queue.Empty:
-            continue
-        if item is None:
-            save_queue.task_done()
-            break
-        output_folder, name, timestamp, frame, do_npy, do_png = item
-        try:
-            if do_npy: np.save(f'{output_folder}/{name}_{timestamp}.npy', frame)
-            if do_png: cv2.imwrite(f'{output_folder}/{name}_{timestamp}.png', frame)
-        finally:
-            del frame
-        save_queue.task_done()
+from utils import (
+    CONTROL_WINDOW_NAME,
+    update_control_window,
+    initialize_mono_control,
+    controlQueueSend,
+)
 
 print(f"[System] DepthAI version: {dai.__version__}")
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 root_path = os.path.join(script_dir, 'output')
 
-def parse_arguments(root_path):
-    parser = argparse.ArgumentParser()
+
+def parse_arguments():
+    parser = argparse.ArgumentParser(description="Record stereo streams using holistic recording.")
     parser.add_argument("--settings", default="capture_settings.json",
                        help="Path to settings JSON file (default: capture_settings.json)")
     parser.add_argument("--output", default=root_path,
-                        help="Custom output folder")
-    parser.add_argument("--autostart", default=-1, type=int,
-                       help='Automatically start capturing after given number of seconds (-1 to disable)')
-    parser.add_argument("--ip", default=None, dest="ip",
+                        help="Custom output root folder")
+    parser.add_argument("--ip", default=None,
                         help="IP to connect to")
-    parser.add_argument("--autostart_time", default=0,
-                       help="Select a fixed time when the script is supposed to start")
-    parser.add_argument("--autostart_end", default=0,
-                       help="Select a fixed time for capture to end")
     parser.add_argument("--capture-name", default=None, dest="capture_name",
                        help="Optional name for the capture (will be included in folder name)")
     parser.add_argument("--no-streams", action="store_true",
-                       help="Do not show stream windows (faster capture); use control window for S/Q")
-    parser.add_argument("--png", action="store_true",
-                       help="Save left, right, rgb as PNG (disables npy unless --npy is also set)")
-    parser.add_argument("--npy", action="store_true",
-                       help="Save frames as numpy (default when no format option is set)")
+                       help="Do not show stream windows; use control window for Q")
+    parser.add_argument("--num-frames", default=None, type=int,
+                       help="Stop after capturing this many frames (default: unlimited)")
     return parser.parse_args()
 
-def main(args):
-    settings_path, ip, autostart, autostart_time, wait_end, capture_name = process_argument_logic(args)
-    print(f"[Device] Connecting to device... IP: {ip}")
 
-    if ip is not None: 
-        device = dai.Device(ip)
-    else: 
-        device = dai.Device()
-    mxid = device.getDeviceId()
-
+def build_output_dir(output_root, device, capture_name=None):
+    date = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
     device_name = device.getDeviceName()
-    print("[Device] Device connected! ")
+    device_id = device.getDeviceId()
+    if capture_name:
+        base_name = f"{device_name}_{device_id}_{capture_name}_{date}"
+    else:
+        base_name = f"{device_name}_{device_id}_{date}"
+    return os.path.join(output_root, base_name)
+
+
+def main(args):
+    settings_path = args.settings
+    if not os.path.exists(settings_path):
+        raise FileNotFoundError(f"Settings file '{settings_path}' does not exist.")
+
+    with open(settings_path) as f:
+        settings = json.load(f)
+
+    capture_name = args.capture_name
+    if capture_name and '_' in capture_name:
+        capture_name = capture_name.replace('_', '-')
+        print(f"[Capture] Warning: Underscores replaced with hyphens: {capture_name}")
+
+    ip = args.ip
+    print(f"[Device] Connecting to device... IP: {ip}")
+    device = dai.Device(ip) if ip else dai.Device()
+    mxid = device.getDeviceId()
+    device_name = device.getDeviceName()
+    print(f"[Device] Device connected!")
     print(f"[Device] Device Name: {device_name}")
     print(f"[Device] Device ID: {mxid}")
 
-    with open(settings_path) as settings_file:
-        settings = json.load(settings_file)
+    output_dir = build_output_dir(args.output, device, capture_name)
+    os.makedirs(output_dir, exist_ok=True)
 
-    output_folder = None
-    num_captures = 0
+    # Save capture metadata alongside the holistic recording
+    metadata = {
+        "model_name": device_name,
+        "mxId": mxid,
+        "dai_version": dai.__version__,
+        "platform": device.getPlatform().name,
+        "capture_name": capture_name,
+        "date": datetime.datetime.now().strftime("%Y%m%d%H%M%S"),
+        "settings_name": settings_path,
+        "settings": settings,
+    }
+    with open(os.path.join(output_dir, "metadata.json"), 'w') as f:
+        json.dump(metadata, f, indent=4)
+    print(f"[Capture] Metadata saved to {output_dir}/metadata.json")
 
-    save = False
+    no_streams = args.no_streams
+    num_frames_limit = args.num_frames
 
-    streams = count_output_streams(settings['output_settings'])
-    if settings['num_captures'] == 'inf' or settings['num_captures'] == 'INF': 
-        settings['num_captures'] = float('inf')
-    final_num_captures = settings['num_captures'] * len(streams)
-    capture_limit_str = "until stopped" if settings['num_captures'] == float('inf') else f"{int(settings['num_captures'])} frames per stream"
-    print(f"[Streams] Active streams: {streams}")
-    print(f"[Streams] Number of streams: {len(streams)}")
-    print(f"[Capture] Will capture max frames ({settings['num_captures']}) * number of streams ({len(streams)}) = {final_num_captures}")
-
-    initial_time = time.time()
-    if autostart_time:
-        print(f"[Capture] Waiting till: {autostart_time}")
-    elif autostart >= 0:
-        print(f"[Capture] Capture will start automatically after {autostart} seconds")
-    else:
-        print("\n" + "="*60)
-        print("[CONTROLS] Press 'S' to START capturing")
-        print("[CONTROLS] Press 'Q' to QUIT")
-        print("="*60 + "\n")
-
-    no_streams = getattr(args, 'no_streams', False)
-    save_npy = args.npy or not args.png
-    save_png = args.png
-    png_streams = ('left', 'right', 'rgb')
-    save_queue = queue.Queue(maxsize=SAVE_QUEUE_MAXSIZE)
-    saver_thread = threading.Thread(target=_saver_worker, args=(save_queue,), daemon=False)
-    saver_thread.start()
     if no_streams:
         cv2.namedWindow(CONTROL_WINDOW_NAME)
 
     with dai.Pipeline(device) as pipeline:
-        pipeline, q, input_queues, stereo_settings = initialize_pipeline(pipeline, settings)
+        # Enable holistic recording (lossless FFV1/AVI)
+        record_config = dai.RecordConfig()
+        record_config.outputDir = output_dir
+        record_config.videoEncoding.enabled = False  # lossless FFV1
+        record_config.syncCameraOutputs = False
+        pipeline.enableHolisticRecord(record_config)
+
+        # Set up cameras
+        stereo_w = settings["stereoResolution"]["x"]
+        stereo_h = settings["stereoResolution"]["y"]
+        fps = settings["FPS"]
+
+        left_cam = pipeline.create(dai.node.Camera).build(dai.CameraBoardSocket.CAM_B)
+        left_out = left_cam.requestOutput((stereo_w, stereo_h), fps=fps)
+        left_queue = left_out.createOutputQueue(maxSize=4, blocking=False)
+
+        right_cam = pipeline.create(dai.node.Camera).build(dai.CameraBoardSocket.CAM_C)
+        right_out = right_cam.requestOutput((stereo_w, stereo_h), fps=fps)
+        right_queue = right_out.createOutputQueue(maxSize=4, blocking=False)
+
+        rgb_queue = None
+        output_settings = settings.get("output_settings", {})
+        if output_settings.get("rgb", True):
+            rgb_cam = pipeline.create(dai.node.Camera).build(dai.CameraBoardSocket.CAM_A)
+            rgb_w = settings["rgbResolution"]["x"]
+            rgb_h = settings["rgbResolution"]["y"]
+            rgb_out = rgb_cam.requestOutput((rgb_w, rgb_h), fps=fps)
+            rgb_queue = rgb_out.createOutputQueue(maxSize=4, blocking=False)
+
+        # IMU — record accelerometer + gyroscope for replay pipelines
+        imu = pipeline.create(dai.node.IMU)
+        imu.enableIMUSensor(dai.IMUSensor.ACCELEROMETER_RAW, 100)
+        imu.enableIMUSensor(dai.IMUSensor.GYROSCOPE_RAW, 100)
+        imu.setBatchReportThreshold(10)
+        imu.setMaxBatchReports(10)
+        print("[IMU] Recording ACCELEROMETER_RAW @ 100 Hz, GYROSCOPE_RAW @ 100 Hz")
+
+        # Camera control queues
+        input_queues = {
+            "left_input_control": left_cam.inputControl.createInputQueue(),
+            "right_input_control": right_cam.inputControl.createInputQueue(),
+        }
+
         pipeline.start()
 
         platform = pipeline.getDefaultDevice().getPlatform()
         print(f"[Device] Platform: {platform}")
+
         if platform == dai.Platform.RVC4:
             control = initialize_mono_control(settings)
             controlQueueSend(input_queues, control)
 
-        if settings['ir']: pipeline.getDefaultDevice().setIrLaserDotProjectorIntensity(settings['ir_value'])
-        if settings['flood_light']: pipeline.getDefaultDevice().setIrFloodLightIntensity(settings['flood_light_intensity'])
+        if settings.get('ir', False):
+            pipeline.getDefaultDevice().setIrLaserDotProjectorIntensity(settings['ir_value'])
+        if settings.get('flood_light', False):
+            pipeline.getDefaultDevice().setIrFloodLightIntensity(settings['flood_light_intensity'])
 
-        print("\n[Capture] Starting...")
+        print(f"\n[Capture] Recording to: {output_dir}")
+        print("[Capture] Calibration saved automatically (camera_info.json).")
+        print(f"[Capture] Streams: left, right"
+              f"{', rgb' if rgb_queue else ''}"
+              f", IMU")
+        print("\n" + "="*60)
+        print("[STATUS] >>> RECORDING... <<<")
+        print("[CONTROLS] Press 'Q' to STOP and QUIT")
+        print("="*60 + "\n")
+
+        num_frames = 0
+        start_time = time.time()
+        display_failed = False
+
         while pipeline.isRunning():
-            current_time = time.time()
-            if not save and check_autostart_condition(autostart, autostart_time, initial_time, current_time):
-                output_folder, start_time = start_capture(
-                    root_path, device, settings_path, capture_name, stereo_settings
-                )
-                save = True
-                print("[Capture] Starting capture via autostart")
-                print("\n" + "="*60)
-                print("[STATUS] >>> CAPTURING... <<<")
-                print("[CONTROLS] Press 'S' to STOP, 'Q' to QUIT")
-                print("="*60 + "\n")
+            left_frame = left_queue.get()
+            right_frame = right_queue.get()
 
-            if autostart >= 0 and not save:
-                if autostart_time:
-                    countdown_seconds = max(0, int(autostart_time.timestamp() - current_time))
-                else:
-                    countdown_seconds = max(0, int((initial_time + autostart) - current_time))
-            else:
-                countdown_seconds = None
+            if left_frame is not None:
+                num_frames += 1
+                if not no_streams and not display_failed:
+                    try:
+                        cv2.imshow(f"{mxid} left", left_frame.getCvFrame())
+                    except cv2.error:
+                        display_failed = True
+                        print("[Capture] Warning: Display not available, falling back to --no-streams mode")
+                        cv2.namedWindow(CONTROL_WINDOW_NAME)
 
-            if settings["output_settings"]["sync"]:
-                if not q['sync'].has():
-                    continue
-                msgGrp = q['sync'].get()
-                for name, msg in msgGrp:
-                    timestamp = int(msg.getTimestamp().total_seconds() * 1000)
+            if right_frame is not None:
+                if not no_streams and not display_failed:
+                    cv2.imshow(f"{mxid} right", right_frame.getCvFrame())
 
-                    if 'raw' in name:
-                        dataRaw = msg.getData()
-                        cvFrame = unpackRaw10(dataRaw, msg.getWidth(), msg.getHeight(), msg.getStride())
-                    else: 
-                        cvFrame = msg.getCvFrame()
+            if rgb_queue is not None:
+                rgb_frame = rgb_queue.get()
+                if rgb_frame is not None and not no_streams and not display_failed:
+                    cv2.imshow(f"{mxid} rgb", rgb_frame.getCvFrame())
 
-                    if save:
-                        if name in ['left', 'right']:
-                            if len(cvFrame.shape) == 3:
-                                cvFrame = cv2.cvtColor(cvFrame, cv2.COLOR_BGR2GRAY)
-                        do_png = save_png and name in png_streams
-                        if save_npy or do_png:
-                            save_queue.put(
-                                (output_folder, name, timestamp, cvFrame.copy(), save_npy, do_png),
-                                block=True
-                            )
-                        num_captures += 1
-                    
-                    if not no_streams:
-                        show_stream(name, cvFrame, timestamp, mxid, save, num_captures, capture_limit_str, countdown_seconds)
-                if no_streams:
-                    update_control_window(save, num_captures, capture_limit_str, countdown_seconds)
-            else:
-                for name in q.keys():
-                    if not q[name].has():
-                        continue
-                    frame = q[name].get()
-                    if 'raw' in name:
-                        dataRaw = frame.getData()
-                        cvFrame = unpackRaw10(dataRaw, frame.getWidth(), frame.getHeight(), frame.getStride())
-                    else: 
-                        cvFrame = frame.getCvFrame()
-                    timestamp = int(frame.getTimestamp().total_seconds() * 1000)
-                    if save:
-                        if name in ['left', 'right']:
-                            if len(cvFrame.shape) == 3:
-                                cvFrame = cv2.cvtColor(cvFrame, cv2.COLOR_BGR2GRAY)
-                        do_png = save_png and name in png_streams
-                        if save_npy or do_png:
-                            save_queue.put(
-                                (output_folder, name, timestamp, cvFrame.copy(), save_npy, do_png),
-                                block=True
-                            )
-                        num_captures += 1
-                    
-                    if not no_streams:
-                        show_stream(name, cvFrame, timestamp, mxid, save, num_captures, capture_limit_str, countdown_seconds)
-                if no_streams:
-                    update_control_window(save, num_captures, capture_limit_str, countdown_seconds)
+            if no_streams or display_failed:
+                update_control_window(True, num_frames)
 
-            key = cv2.waitKey(1)
-            if key == ord('q'):
-                pipeline.stop()
-                break
-            elif key == ord("s"):
-                save = not save
-                if save:
-                    output_folder, start_time = start_capture(
-                        root_path, device, settings_path, capture_name, stereo_settings
-                    )
-                    print("[STATUS] CAPTURING...")
-                else:
-                    print("[STATUS] STOPPING CAPTURE")
-                    stop_capture(start_time, num_captures, streams, pipeline)
-                    break
-
-            if save and check_stop_condition(wait_end, num_captures, final_num_captures, time.time()):
-                print("[STATUS] STOP CONDITION MET - STOPPING CAPTURE")
-                stop_capture(start_time, num_captures, streams, pipeline)
+            if num_frames_limit and num_frames >= num_frames_limit:
+                print(f"[Capture] Reached frame limit ({num_frames_limit})")
                 break
 
-    save_queue.put(None)
-    saver_thread.join(timeout=60)
-    if saver_thread.is_alive():
-        print("[Capture] Warning: saver thread did not finish in time")
+            if cv2.waitKey(1) == ord('q'):
+                break
+
+        # Keep consuming frames so the pipeline continues processing
+        # and the recording thread can flush remaining buffered frames.
+        print("[Capture] Flushing recording...")
+        flush_start = time.time()
+        while pipeline.isRunning() and (time.time() - flush_start) < 10:
+            try:
+                left_queue.get(timeout=datetime.timedelta(seconds=1))
+                right_queue.get(timeout=datetime.timedelta(seconds=1))
+                if rgb_queue is not None:
+                    rgb_queue.get(timeout=datetime.timedelta(seconds=1))
+            except Exception:
+                break
+            cv2.waitKey(1)
+
+        pipeline.stop()
+        pipeline.wait()
+        cv2.destroyAllWindows()
+
+    elapsed = time.time() - start_time
+    print(f"\n[Capture] Recording finished. {num_frames} frames in {elapsed:.1f}s "
+          f"({num_frames / max(elapsed, 0.001):.1f} FPS)")
+    print(f"[Capture] Output: {output_dir}")
 
 
 if __name__ == "__main__":
-    args = parse_arguments(root_path)
+    args = parse_arguments()
     main(args)

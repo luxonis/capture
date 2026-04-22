@@ -2,4 +2,6 @@ depthai>=3.0.0
 numpy
 opencv-python
 screeninfo
+mcap
+protobuf
 
