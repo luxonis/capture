@@ -231,7 +231,7 @@ def main():
                         # Save depth (npy + colorized png) — mirrored vertically then rotated 90°
                         depth_data = depth_frame.getFrame()
                         depth_data = np.flip(depth_data, axis=1)  # mirror along vertical axis
-                        depth_data = np.rot90(depth_data)          # rotate 90°
+                        depth_data = np.ascontiguousarray(np.rot90(depth_data))  # rotate 90°
                         depth_ts = int(depth_frame.getTimestamp().total_seconds() * 1000)
                         np.save(f'{output_folder}/depth_{depth_ts}.npy', depth_data)
                         depth_vis = (depth_data.astype(np.float32) / depth_data.max() * 255).astype(np.uint8) if depth_data.max() > 0 else np.zeros_like(depth_data, dtype=np.uint8)
@@ -242,7 +242,7 @@ def main():
                         if amp_frame is not None:
                             amp_data = amp_frame.getFrame()
                             amp_data = np.flip(amp_data, axis=1)  # mirror along vertical axis
-                            amp_data = np.rot90(amp_data)          # rotate 90°
+                            amp_data = np.ascontiguousarray(np.rot90(amp_data))  # rotate 90°
                             amp_ts = int(amp_frame.getTimestamp().total_seconds() * 1000)
                             np.save(f'{output_folder}/amplitude_{amp_ts}.npy', amp_data)
                             amp_vis = (amp_data.astype(np.float32) / amp_data.max() * 255).astype(np.uint8) if amp_data.max() > 0 else np.zeros_like(amp_data, dtype=np.uint8)
