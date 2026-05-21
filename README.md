@@ -79,3 +79,31 @@ python capture_data_stereo.py --no-streams
 - **s**: Start or stop capture
 - **q**: Quit
 
+---
+
+## ToF Raw Capture
+
+`capture_data_tof_raw.py` captures raw ToF superframes, depth, amplitude, and left/right/RGB streams from RVC4 devices with a ToF sensor.
+
+> **Note:** This script requires a compatible version of the `depthai` and a matching RVC4 firmware package (`.tar.xz`).
+
+### Usage
+
+```bash
+python capture_data_tof_raw.py --ip <DEVICE_IP> --fwp <PATH_TO_FWP>
+```
+
+**arguments:**
+
+| Option | Description |
+|--------|-------------|
+| `--ip` | Device IP address |
+| `--fwp` | Path to the RVC4 firmware package (e.g. `depthai-device-rvc4-fwp.tar.xz`) |
+| `--num-frames` | Number of frames to save (default: 16) |
+| `--capture-name` | Name for the capture folder |
+| `--preset` | ToF preset: `low`, `mid`, `high` (default: `high`) |
+| `--show-streams` | Show live preview; press `S` to start capture, `Q` to quit |
+| `--skip-warmup` | Skip warmup frames |
+| `--warmup-frames` | Number of warmup frames (default: 30) |
+
+
