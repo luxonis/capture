@@ -18,6 +18,7 @@ import argparse
 import datetime
 import json
 import os
+import subprocess
 import time
 
 import cv2
@@ -88,6 +89,23 @@ def initialize_capture_folder(output_root, device, capture_name):
         f.write("It is expected to be used on static scenes only.\n")
 
     return out_dir
+
+
+def fetch_eeprom(ip, output_folder):
+    """SSH into device and copy eeprom_vd55h1.bin to the output folder."""
+    remote_path = f"root@{ip}:/data/vendor/camera/eeprom_vd55h1.bin"
+    local_path = os.path.join(output_folder, "eeprom_vd55h1.bin")
+    print(f"[SCP] Fetching eeprom_vd55h1.bin from {ip}...")
+    try:
+        subprocess.run(
+            ["scp", "-o", "StrictHostKeyChecking=no", remote_path, local_path],
+            check=True, timeout=30,
+        )
+        print(f"[SCP] Saved to {local_path}")
+    except subprocess.CalledProcessError as e:
+        print(f"[SCP] WARNING: Failed to fetch eeprom file: {e}")
+    except subprocess.TimeoutExpired:
+        print(f"[SCP] WARNING: SCP timed out after 30s")
 
 
 def main():
@@ -192,6 +210,8 @@ def main():
                             # No --show-streams: start saving immediately after warmup
                             output_folder = initialize_capture_folder(
                                 args.output, device, args.capture_name)
+                            if args.ip:
+                                fetch_eeprom(args.ip, output_folder)
                             saving = True
                             start_time = time.time()
                             print(f"\n[Capture] Warmup done. Saving {args.num_frames} frames...")
@@ -305,6 +325,8 @@ def main():
                         if not saving and warmup_done:
                             output_folder = initialize_capture_folder(
                                 args.output, device, args.capture_name)
+                            if args.ip:
+                                fetch_eeprom(args.ip, output_folder)
                             saving = True
                             start_time = time.time()
                             num_captures = 0
