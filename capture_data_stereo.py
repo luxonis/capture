@@ -5,7 +5,6 @@ import os
 os.environ["DEPTHAI_AUTOCALIBRATION"] = "OFF"
 
 import depthai as dai
-import numpy as np
 import time
 import json
 import cv2
@@ -20,6 +19,7 @@ SAVE_QUEUE_MAXSIZE = 200  # max frames buffered for saving; when full, capture b
 
 
 def _saver_worker(save_queue):
+    known_stream_dirs = set()
     while True:
         try:
             item = save_queue.get(timeout=0.5)
@@ -28,12 +28,15 @@ def _saver_worker(save_queue):
         if item is None:
             save_queue.task_done()
             break
-        output_folder, name, timestamp, frame, do_npy, do_png = item
+        output_folder, name, timestamp, msg = item
         try:
-            if do_npy: np.save(f'{output_folder}/{name}_{timestamp}.npy', frame)
-            if do_png: cv2.imwrite(f'{output_folder}/{name}_{timestamp}.png', frame)
+            stream_dir = f'{output_folder}/{name}'
+            if stream_dir not in known_stream_dirs:
+                os.makedirs(stream_dir, exist_ok=True)
+                known_stream_dirs.add(stream_dir)
+            msg.save(f'{stream_dir}/{name}_{timestamp}')
         finally:
-            del frame
+            del msg
         save_queue.task_done()
 
 print(f"[System] DepthAI version: {dai.__version__}")
@@ -59,10 +62,6 @@ def parse_arguments(root_path):
                        help="Optional name for the capture (will be included in folder name)")
     parser.add_argument("--no-streams", action="store_true",
                        help="Do not show stream windows (faster capture); use control window for S/Q")
-    parser.add_argument("--png", action="store_true",
-                       help="Save left, right, rgb as PNG (disables npy unless --npy is also set)")
-    parser.add_argument("--npy", action="store_true",
-                       help="Save frames as numpy (default when no format option is set)")
     return parser.parse_args()
 
 def main(args):
@@ -109,9 +108,6 @@ def main(args):
         print("="*60 + "\n")
 
     no_streams = getattr(args, 'no_streams', False)
-    save_npy = args.npy or not args.png
-    save_png = args.png
-    png_streams = ('left', 'right', 'rgb')
     save_queue = queue.Queue(maxsize=SAVE_QUEUE_MAXSIZE)
     saver_thread = threading.Thread(target=_saver_worker, args=(save_queue,), daemon=False)
     saver_thread.start()
@@ -170,14 +166,9 @@ def main(args):
                         if name in ['left', 'right']:
                             if len(cvFrame.shape) == 3:
                                 cvFrame = cv2.cvtColor(cvFrame, cv2.COLOR_BGR2GRAY)
-                        do_png = save_png and name in png_streams
-                        if save_npy or do_png:
-                            save_queue.put(
-                                (output_folder, name, timestamp, cvFrame.copy(), save_npy, do_png),
-                                block=True
-                            )
+                        save_queue.put((output_folder, name, timestamp, msg), block=True)
                         num_captures += 1
-                    
+
                     if not no_streams:
                         show_stream(name, cvFrame, timestamp, mxid, save, num_captures, capture_limit_str, countdown_seconds)
                 if no_streams:
@@ -197,14 +188,9 @@ def main(args):
                         if name in ['left', 'right']:
                             if len(cvFrame.shape) == 3:
                                 cvFrame = cv2.cvtColor(cvFrame, cv2.COLOR_BGR2GRAY)
-                        do_png = save_png and name in png_streams
-                        if save_npy or do_png:
-                            save_queue.put(
-                                (output_folder, name, timestamp, cvFrame.copy(), save_npy, do_png),
-                                block=True
-                            )
+                        save_queue.put((output_folder, name, timestamp, frame), block=True)
                         num_captures += 1
-                    
+
                     if not no_streams:
                         show_stream(name, cvFrame, timestamp, mxid, save, num_captures, capture_limit_str, countdown_seconds)
                 if no_streams:

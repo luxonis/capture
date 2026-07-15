@@ -163,12 +163,17 @@ def create_and_save_metadata(device, settings_path, output_dir, capture_name, da
     model_name = device.getDeviceName()
     mxId = device.getMxId()
     platform = device.getPlatform().name
+    try:
+        os_version = device.getOSVersion()
+    except Exception:
+        os_version = None
     settings = json.load(open(settings_path))
     metadata = {
         "model_name": model_name,
         "mxId": mxId,
         "dai_version": dai.__version__,
         "platform": platform,
+        "os_version": os_version,
         "capture_type": capture_type,
         "capture_name": capture_name,
         "date": date,
