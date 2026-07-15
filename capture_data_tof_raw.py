@@ -72,11 +72,17 @@ def initialize_capture_folder(output_root, device, capture_name):
     calib = device.readCalibration()
     calib.eepromToJsonFile(os.path.join(out_dir, 'calib.json'))
 
+    try:
+        os_version = device.getOSVersion()
+    except Exception:
+        os_version = None
+
     metadata = {
         "model_name": device_name,
         "mxId": device_id,
         "dai_version": dai.__version__,
         "platform": device.getPlatform().name,
+        "os_version": os_version,
         "capture_type": "tof_raw",
         "capture_name": capture_name,
         "date": date,
