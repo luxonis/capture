@@ -6,56 +6,36 @@ os.environ["DEPTHAI_AUTOCALIBRATION"] = "OFF"
 
 import depthai as dai
 import time
-import json
 import cv2
 import argparse
 import queue
 import threading
 
 from utils import *
-from pipeline import initialize_pipeline
+from pipeline import initialize_pipeline, OUTPUT_SETTINGS
 
 SAVE_QUEUE_MAXSIZE = 200  # max frames buffered for saving; when full, capture blocks until the saver catches up
 
-# Default capture settings, embedded so the script works standalone without capture_settings.json.
-# Override with --settings <path-to-json> if you need a different configuration.
-DEFAULT_SETTINGS = {
-    "ir": True,
-    "ir_value": 0.8,
-    "flood_light": False,
-    "flood_light_intensity": 1,
-    "stereoResolution": {"x": 1280, "y": 800},
-    "rgbResolution": {"x": 1280, "y": 800},
+# Capture settings, embedded so the script works standalone. Not overridable via CLI/JSON;
+# edit directly to change. Recorded in each capture's metadata.json.
+IR = True
+IR_VALUE = 0.8
+FLOOD_LIGHT = False
+FLOOD_LIGHT_INTENSITY = 1
+STEREO_RESOLUTION = {"x": 1280, "y": 800}
+RGB_RESOLUTION = {"x": 1280, "y": 800}
+FPS = 30
+NUM_CAPTURES = 20
 
-    "sync_on_host": False,
-    "monoSettings": {
-        "luma_denoise": 2,
-        "chroma_denoise": 0,
-        "sharpness": 1,
-        "contrast": 0
-    },
-    "exposureSettings": {
-        "autoexposure": True,
-        "expTime": 3000,
-        "sensIso": 150
-    },
-
-    "output_settings": {
-        "left": True,
-        "left_raw": False,
-        "right": True,
-        "right_raw": False,
-        "rgb": True,
-        "depth": True,
-        "disparity": False,
-        "hw_sync": False,
-        "sync": True
-    },
-
-    "extendedDisparity": True,
-
-    "FPS": 30,
-    "num_captures": 20
+SETTINGS = {
+    "ir": IR,
+    "ir_value": IR_VALUE,
+    "flood_light": FLOOD_LIGHT,
+    "flood_light_intensity": FLOOD_LIGHT_INTENSITY,
+    "stereoResolution": STEREO_RESOLUTION,
+    "rgbResolution": RGB_RESOLUTION,
+    "FPS": FPS,
+    "num_captures": NUM_CAPTURES,
 }
 
 
@@ -87,8 +67,6 @@ root_path = os.path.join(script_dir, 'output')
 
 def parse_arguments(root_path):
     parser = argparse.ArgumentParser()
-    parser.add_argument("--settings", default=None,
-                       help="Path to a settings JSON file to override the embedded defaults")
     parser.add_argument("--output", default=root_path,
                         help="Custom output folder")
     parser.add_argument("--autostart", default=-1, type=int,
@@ -120,27 +98,17 @@ def main(args):
     print(f"[Device] Device Name: {device_name}")
     print(f"[Device] Device ID: {mxid}")
 
-    if args.settings:
-        with open(args.settings) as settings_file:
-            settings = json.load(settings_file)
-        settings_name = args.settings
-    else:
-        settings = DEFAULT_SETTINGS
-        settings_name = "embedded"
-
     output_folder = None
     num_captures = 0
 
     save = False
 
-    streams = count_output_streams(settings['output_settings'])
-    if settings['num_captures'] == 'inf' or settings['num_captures'] == 'INF': 
-        settings['num_captures'] = float('inf')
-    final_num_captures = settings['num_captures'] * len(streams)
-    capture_limit_str = "until stopped" if settings['num_captures'] == float('inf') else f"{int(settings['num_captures'])} frames per stream"
+    streams = count_output_streams(OUTPUT_SETTINGS)
+    final_num_captures = NUM_CAPTURES * len(streams)
+    capture_limit_str = "until stopped" if NUM_CAPTURES == float('inf') else f"{int(NUM_CAPTURES)} frames per stream"
     print(f"[Streams] Active streams: {streams}")
     print(f"[Streams] Number of streams: {len(streams)}")
-    print(f"[Capture] Will capture max frames ({settings['num_captures']}) * number of streams ({len(streams)}) = {final_num_captures}")
+    print(f"[Capture] Will capture max frames ({NUM_CAPTURES}) * number of streams ({len(streams)}) = {final_num_captures}")
 
     initial_time = time.time()
     if autostart_time:
@@ -161,24 +129,24 @@ def main(args):
         cv2.namedWindow(CONTROL_WINDOW_NAME)
 
     with dai.Pipeline(device) as pipeline:
-        pipeline, q, input_queues, stereo_settings = initialize_pipeline(pipeline, settings)
+        pipeline, q, input_queues, stereo_settings = initialize_pipeline(pipeline, STEREO_RESOLUTION, RGB_RESOLUTION, FPS)
         pipeline.start()
 
         platform = pipeline.getDefaultDevice().getPlatform()
         print(f"[Device] Platform: {platform}")
         if platform == dai.Platform.RVC4:
-            control = initialize_mono_control(settings)
+            control = initialize_mono_control()
             controlQueueSend(input_queues, control)
 
-        if settings['ir']: pipeline.getDefaultDevice().setIrLaserDotProjectorIntensity(settings['ir_value'])
-        if settings['flood_light']: pipeline.getDefaultDevice().setIrFloodLightIntensity(settings['flood_light_intensity'])
+        if IR: pipeline.getDefaultDevice().setIrLaserDotProjectorIntensity(IR_VALUE)
+        if FLOOD_LIGHT: pipeline.getDefaultDevice().setIrFloodLightIntensity(FLOOD_LIGHT_INTENSITY)
 
         print("\n[Capture] Starting...")
         while pipeline.isRunning():
             current_time = time.time()
             if not save and check_autostart_condition(autostart, autostart_time, initial_time, current_time):
                 output_folder, start_time = start_capture(
-                    root_path, device, settings, capture_name, stereo_settings, settings_name
+                    root_path, device, SETTINGS, capture_name, stereo_settings
                 )
                 save = True
                 print("[Capture] Starting capture via autostart")
@@ -195,7 +163,7 @@ def main(args):
             else:
                 countdown_seconds = None
 
-            if settings["output_settings"]["sync"]:
+            if OUTPUT_SETTINGS["sync"]:
                 if not q['sync'].has():
                     continue
                 msgGrp = q['sync'].get()
@@ -250,7 +218,7 @@ def main(args):
                 save = not save
                 if save:
                     output_folder, start_time = start_capture(
-                        root_path, device, settings, capture_name, stereo_settings, settings_name
+                        root_path, device, SETTINGS, capture_name, stereo_settings
                     )
                     print("[STATUS] CAPTURING...")
                 else:

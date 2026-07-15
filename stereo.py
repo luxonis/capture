@@ -1,9 +1,12 @@
 import depthai as dai
 
+# Not user-configurable; edit directly to change.
+EXTENDED_DISPARITY = True
 
-def _apply_common(stereo, initial_config, settings):
+
+def _apply_common(stereo, initial_config):
     stereo.setRectification(True)
-    initial_config.algorithmControl.enableExtended = settings["extendedDisparity"]
+    initial_config.algorithmControl.enableExtended = EXTENDED_DISPARITY
     initial_config.algorithmControl.leftRightCheckThreshold = 10
     
     initial_config.algorithmControl.disparityShift = 0
@@ -94,12 +97,11 @@ def _apply_rvc4(initial_config):
     initial_config.confidenceMetrics.flatnessOverride = False
 
 
-def setup_stereo(pipeline, settings, platform):
+def setup_stereo(pipeline, platform):
     """
     Set up stereo depth node with parameters for the given platform.
 
     :param pipeline: DepthAI pipeline object
-    :param settings: Dictionary containing stereo settings (e.g. extendedDisparity)
     :param platform: dai.Platform.RVC2 or dai.Platform.RVC4
     :return: Configured StereoDepth node
     """
@@ -111,7 +113,7 @@ def setup_stereo(pipeline, settings, platform):
     # return stereo
 
     # Option 2: configure parameters yourself (common + platform-specific below)
-    _apply_common(stereo, initial_config, settings)
+    _apply_common(stereo, initial_config)
 
     if platform == dai.Platform.RVC2:
         _apply_rvc2(stereo, initial_config)

@@ -159,8 +159,7 @@ def show_stream(name, frame, timestamp, mxid, is_capturing=False, num_captures=0
 
 
 def create_and_save_metadata(device, settings, output_dir, capture_name, date,
-                            capture_type=None, author=None, notes=None, stereo_settings=None,
-                            settings_name="embedded"):
+                            capture_type=None, author=None, notes=None, stereo_settings=None):
     model_name = device.getDeviceName()
     mxId = device.getMxId()
     platform = device.getPlatform().name
@@ -179,7 +178,6 @@ def create_and_save_metadata(device, settings, output_dir, capture_name, date,
         "date": date,
         "notes": notes,
         "author": author,
-        "settings_name": settings_name,
         "settings": settings,
     }
     if stereo_settings is not None:
@@ -196,8 +194,7 @@ def create_and_save_metadata(device, settings, output_dir, capture_name, date,
     print(f"[Capture] Metadata saved to {filepath}")
 
 
-def initialize_capture(root_path, device, settings, capture_name=None, projector=None, stereo_settings=None,
-                        settings_name="embedded"):
+def initialize_capture(root_path, device, settings, capture_name=None, projector=None, stereo_settings=None):
     date = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
     device_name = device.getDeviceName()
     device_id = device.getMxId()
@@ -223,8 +220,7 @@ def initialize_capture(root_path, device, settings, capture_name=None, projector
 
     calib = device.readCalibration()
     calib.eepromToJsonFile(f'{out_dir}/calib.json')
-    create_and_save_metadata(device, settings, out_dir, capture_name, date, stereo_settings=stereo_settings,
-                              settings_name=settings_name)
+    create_and_save_metadata(device, settings, out_dir, capture_name, date, stereo_settings=stereo_settings)
 
     return out_dir
 
@@ -250,18 +246,31 @@ def controlQueueSend(input_queues, ctrl):
         queue.send(ctrl)
 
 
-def initialize_mono_control(settings):
+# Not user-configurable; edit directly to change.
+MONO_SETTINGS = {
+    "luma_denoise": 2,
+    "chroma_denoise": 0,
+    "sharpness": 1,
+    "contrast": 0
+}
+
+EXPOSURE_SETTINGS = {
+    "autoexposure": True,
+    "expTime": 3000,
+    "sensIso": 150
+}
+
+
+def initialize_mono_control():
     ctrl = dai.CameraControl()
 
-    mono_settings = settings["monoSettings"]
-    ctrl.setLumaDenoise(mono_settings["luma_denoise"])
-    ctrl.setChromaDenoise(mono_settings["chroma_denoise"])
-    ctrl.setSharpness(mono_settings["sharpness"])
-    ctrl.setContrast(mono_settings["contrast"])
+    ctrl.setLumaDenoise(MONO_SETTINGS["luma_denoise"])
+    ctrl.setChromaDenoise(MONO_SETTINGS["chroma_denoise"])
+    ctrl.setSharpness(MONO_SETTINGS["sharpness"])
+    ctrl.setContrast(MONO_SETTINGS["contrast"])
 
-    exposure_settings = settings["exposureSettings"]
-    if not exposure_settings["autoexposure"]:
-        ctrl.setManualExposure(exposure_settings["expTime"], exposure_settings["sensIso"])
+    if not EXPOSURE_SETTINGS["autoexposure"]:
+        ctrl.setManualExposure(EXPOSURE_SETTINGS["expTime"], EXPOSURE_SETTINGS["sensIso"])
 
     return ctrl
 
@@ -285,20 +294,18 @@ def check_autostart_condition(autostart, autostart_time, initial_time, current_t
         return current_time >= (initial_time + autostart)
 
 
-def start_capture(root_path, device, settings, capture_name=None, stereo_settings=None, settings_name="embedded"):
+def start_capture(root_path, device, settings, capture_name=None, stereo_settings=None):
     """
     Start a new capture session.
 
     :param root_path: Root path for output
     :param device: DepthAI device
-    :param settings: Settings dict for the capture
+    :param settings: Settings dict for the capture (recorded in metadata.json)
     :param capture_name: Optional name for the capture (will be included in folder name and metadata)
     :param stereo_settings: Optional pre-extracted stereo config dict (from pipeline at startup)
-    :param settings_name: Label for where the settings came from (recorded in metadata.json)
     :return: Tuple of (output_folder, start_time)
     """
-    output_folder = initialize_capture(root_path, device, settings, capture_name, stereo_settings=stereo_settings,
-                                        settings_name=settings_name)
+    output_folder = initialize_capture(root_path, device, settings, capture_name, stereo_settings=stereo_settings)
     start_time = time.time()
     print("[Capture] Starting capture")
     return output_folder, start_time

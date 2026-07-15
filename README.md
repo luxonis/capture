@@ -41,7 +41,6 @@ python capture_data_stereo.py [OPTIONS]
 
 | Option | Description |
 |--------|-------------|
-| `--settings` | Path to a settings JSON file to override the embedded defaults (see Settings below) |
 | `--output` | Custom output root folder (default: `output` next to the script) |
 | `--capture-name` | Name for the capture (included in folder name and metadata) |
 | `--ip` | Device IP for network connection (omit for USB) |
@@ -56,14 +55,15 @@ To get plain `.npy`/`.png` files back out of a `.dai` capture, run `convert/conv
 
 ## Settings
 
-The pipeline/capture settings are embedded directly in `capture_data_stereo.py` as `DEFAULT_SETTINGS`, so the script runs standalone without any settings file. Pass `--settings path/to/file.json` to override them with a custom JSON file (same shape as `DEFAULT_SETTINGS`); `capture_settings.json` in this repo is kept as an example of that shape.
+Capture settings are embedded directly in `capture_data_stereo.py` as module-level globals (`IR`, `IR_VALUE`, `FLOOD_LIGHT`, `FLOOD_LIGHT_INTENSITY`, `STEREO_RESOLUTION`, `RGB_RESOLUTION`, `FPS`, `NUM_CAPTURES`); edit the script directly to change them. They're recorded in each capture's `metadata.json`.
 
-- **num_captures**: Max frames per stream (`20`, or `"inf"` for unlimited).
-- **output_settings**: Enable/disable streams: `left`, `right`, `left_raw`, `right_raw`, `rgb`, `depth`, `disparity`; select `sync` for synchronized capture.
-- **stereoResolution** / **rgbResolution**: `{"x": width, "y": height}`.
-- **ir** / **ir_value**: IR laser dot projector (0–1).
-- **flood_light** / **flood_light_intensity**: IR flood light.
+- **NUM_CAPTURES**: Max frames per stream (`20`, or `float('inf')` for unlimited).
+- **STEREO_RESOLUTION** / **RGB_RESOLUTION**: `{"x": width, "y": height}`.
+- **IR** / **IR_VALUE**: IR laser dot projector (0–1).
+- **FLOOD_LIGHT** / **FLOOD_LIGHT_INTENSITY**: IR flood light.
 - **FPS**: Target FPS.
+
+Which streams are captured (`OUTPUT_SETTINGS` in `pipeline.py`), mono camera tuning (`MONO_SETTINGS`/`EXPOSURE_SETTINGS` in `utils.py`), and stereo depth tuning (`EXTENDED_DISPARITY` in `stereo.py`) are hardcoded pipeline configuration rather than user-facing settings — edit those files directly if you need different streams or stereo tuning. `capture_settings.json` is no longer read by the script.
 
 ## Higher FPS (disable stream display)
 
