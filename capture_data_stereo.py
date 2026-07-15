@@ -17,6 +17,47 @@ from pipeline import initialize_pipeline
 
 SAVE_QUEUE_MAXSIZE = 200  # max frames buffered for saving; when full, capture blocks until the saver catches up
 
+# Default capture settings, embedded so the script works standalone without capture_settings.json.
+# Override with --settings <path-to-json> if you need a different configuration.
+DEFAULT_SETTINGS = {
+    "ir": True,
+    "ir_value": 0.8,
+    "flood_light": False,
+    "flood_light_intensity": 1,
+    "stereoResolution": {"x": 1280, "y": 800},
+    "rgbResolution": {"x": 1280, "y": 800},
+
+    "sync_on_host": False,
+    "monoSettings": {
+        "luma_denoise": 2,
+        "chroma_denoise": 0,
+        "sharpness": 1,
+        "contrast": 0
+    },
+    "exposureSettings": {
+        "autoexposure": True,
+        "expTime": 3000,
+        "sensIso": 150
+    },
+
+    "output_settings": {
+        "left": True,
+        "left_raw": False,
+        "right": True,
+        "right_raw": False,
+        "rgb": True,
+        "depth": True,
+        "disparity": False,
+        "hw_sync": False,
+        "sync": True
+    },
+
+    "extendedDisparity": True,
+
+    "FPS": 30,
+    "num_captures": 20
+}
+
 
 def _saver_worker(save_queue):
     known_stream_dirs = set()
@@ -46,8 +87,8 @@ root_path = os.path.join(script_dir, 'output')
 
 def parse_arguments(root_path):
     parser = argparse.ArgumentParser()
-    parser.add_argument("--settings", default="capture_settings.json",
-                       help="Path to settings JSON file (default: capture_settings.json)")
+    parser.add_argument("--settings", default=None,
+                       help="Path to a settings JSON file to override the embedded defaults")
     parser.add_argument("--output", default=root_path,
                         help="Custom output folder")
     parser.add_argument("--autostart", default=-1, type=int,
@@ -65,12 +106,12 @@ def parse_arguments(root_path):
     return parser.parse_args()
 
 def main(args):
-    settings_path, ip, autostart, autostart_time, wait_end, capture_name = process_argument_logic(args)
+    ip, autostart, autostart_time, wait_end, capture_name = process_argument_logic(args)
     print(f"[Device] Connecting to device... IP: {ip}")
 
-    if ip is not None: 
+    if ip is not None:
         device = dai.Device(ip)
-    else: 
+    else:
         device = dai.Device()
     mxid = device.getDeviceId()
 
@@ -79,8 +120,13 @@ def main(args):
     print(f"[Device] Device Name: {device_name}")
     print(f"[Device] Device ID: {mxid}")
 
-    with open(settings_path) as settings_file:
-        settings = json.load(settings_file)
+    if args.settings:
+        with open(args.settings) as settings_file:
+            settings = json.load(settings_file)
+        settings_name = args.settings
+    else:
+        settings = DEFAULT_SETTINGS
+        settings_name = "embedded"
 
     output_folder = None
     num_captures = 0
@@ -132,7 +178,7 @@ def main(args):
             current_time = time.time()
             if not save and check_autostart_condition(autostart, autostart_time, initial_time, current_time):
                 output_folder, start_time = start_capture(
-                    root_path, device, settings_path, capture_name, stereo_settings
+                    root_path, device, settings, capture_name, stereo_settings, settings_name
                 )
                 save = True
                 print("[Capture] Starting capture via autostart")
@@ -204,7 +250,7 @@ def main(args):
                 save = not save
                 if save:
                     output_folder, start_time = start_capture(
-                        root_path, device, settings_path, capture_name, stereo_settings
+                        root_path, device, settings, capture_name, stereo_settings, settings_name
                     )
                     print("[STATUS] CAPTURING...")
                 else:

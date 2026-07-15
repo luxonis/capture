@@ -158,8 +158,9 @@ def show_stream(name, frame, timestamp, mxid, is_capturing=False, num_captures=0
         cv2.imshow(window_title, depth_vis)
 
 
-def create_and_save_metadata(device, settings_path, output_dir, capture_name, date,
-                            capture_type=None, author=None, notes=None, stereo_settings=None):
+def create_and_save_metadata(device, settings, output_dir, capture_name, date,
+                            capture_type=None, author=None, notes=None, stereo_settings=None,
+                            settings_name="embedded"):
     model_name = device.getDeviceName()
     mxId = device.getMxId()
     platform = device.getPlatform().name
@@ -167,7 +168,6 @@ def create_and_save_metadata(device, settings_path, output_dir, capture_name, da
         os_version = device.getOSVersion()
     except Exception:
         os_version = None
-    settings = json.load(open(settings_path))
     metadata = {
         "model_name": model_name,
         "mxId": mxId,
@@ -179,7 +179,7 @@ def create_and_save_metadata(device, settings_path, output_dir, capture_name, da
         "date": date,
         "notes": notes,
         "author": author,
-        "settings_name": settings_path,
+        "settings_name": settings_name,
         "settings": settings,
     }
     if stereo_settings is not None:
@@ -196,7 +196,8 @@ def create_and_save_metadata(device, settings_path, output_dir, capture_name, da
     print(f"[Capture] Metadata saved to {filepath}")
 
 
-def initialize_capture(root_path, device, settings_path, capture_name=None, projector=None, stereo_settings=None):
+def initialize_capture(root_path, device, settings, capture_name=None, projector=None, stereo_settings=None,
+                        settings_name="embedded"):
     date = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
     device_name = device.getDeviceName()
     device_id = device.getMxId()
@@ -222,7 +223,8 @@ def initialize_capture(root_path, device, settings_path, capture_name=None, proj
 
     calib = device.readCalibration()
     calib.eepromToJsonFile(f'{out_dir}/calib.json')
-    create_and_save_metadata(device, settings_path, out_dir, capture_name, date, stereo_settings=stereo_settings)
+    create_and_save_metadata(device, settings, out_dir, capture_name, date, stereo_settings=stereo_settings,
+                              settings_name=settings_name)
 
     return out_dir
 
@@ -283,18 +285,20 @@ def check_autostart_condition(autostart, autostart_time, initial_time, current_t
         return current_time >= (initial_time + autostart)
 
 
-def start_capture(root_path, device, settings_path, capture_name=None, stereo_settings=None):
+def start_capture(root_path, device, settings, capture_name=None, stereo_settings=None, settings_name="embedded"):
     """
     Start a new capture session.
 
     :param root_path: Root path for output
     :param device: DepthAI device
-    :param settings_path: Path to settings file
+    :param settings: Settings dict for the capture
     :param capture_name: Optional name for the capture (will be included in folder name and metadata)
     :param stereo_settings: Optional pre-extracted stereo config dict (from pipeline at startup)
+    :param settings_name: Label for where the settings came from (recorded in metadata.json)
     :return: Tuple of (output_folder, start_time)
     """
-    output_folder = initialize_capture(root_path, device, settings_path, capture_name, stereo_settings=stereo_settings)
+    output_folder = initialize_capture(root_path, device, settings, capture_name, stereo_settings=stereo_settings,
+                                        settings_name=settings_name)
     start_time = time.time()
     print("[Capture] Starting capture")
     return output_folder, start_time
@@ -334,11 +338,7 @@ def stop_capture(start_time, num_captures, streams, pipeline):
 
 
 def process_argument_logic(args):
-    settings_path = args.settings
     ip = args.ip
-
-    if not os.path.exists(settings_path):
-        raise FileNotFoundError(f"Settings file '{settings_path}' does not exist.")
 
     today = datetime.date.today()
 
@@ -361,6 +361,6 @@ def process_argument_logic(args):
             capture_name = capture_name.replace('_', '-')
             print(f"[Capture] Warning: Underscores in capture name replaced with hyphens: {capture_name}")
 
-    return settings_path, ip, args.autostart, wait, wait_end, capture_name
+    return ip, args.autostart, wait, wait_end, capture_name
 
 

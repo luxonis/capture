@@ -1,6 +1,6 @@
 # Stereo Capture Tool
 
-DepthAI capture script for stereo (and optionally RGB/depth) streams from OAK devices. Saves frames as `.npy` files with timestamps and optional calibration/metadata.
+DepthAI capture script for stereo (and optionally RGB/depth) streams from OAK devices. Saves each frame as a `.dai` file (native `ImgFrame` serialization) with timestamps and optional calibration/metadata.
 
 ## Requirements
 
@@ -41,7 +41,7 @@ python capture_data_stereo.py [OPTIONS]
 
 | Option | Description |
 |--------|-------------|
-| `--settings` | Path to settings JSON (default: `capture_settings.json`) |
+| `--settings` | Path to a settings JSON file to override the embedded defaults (see Settings below) |
 | `--output` | Custom output root folder (default: `output` next to the script) |
 | `--capture-name` | Name for the capture (included in folder name and metadata) |
 | `--ip` | Device IP for network connection (omit for USB) |
@@ -49,14 +49,14 @@ python capture_data_stereo.py [OPTIONS]
 | `--autostart_time` | Start at a fixed datetime (e.g. from cron) |
 | `--autostart_end` | Stop at a fixed datetime |
 | `--no-streams` | Do not show stream windows; use control window for S/Q (faster capture) |
-| `--png` | Save left, right, rgb as PNG (disables npy unless `--npy` is also set) |
-| `--npy` | Save frames as numpy (default when no format option is set). Use with `--png` to save both. |
 
-Captures are saved under the output folder in subfolders named by device, optional capture name, and timestamp (e.g. `output/OAK-D_abc123_myrun_20250211120000/`). By default each stream is saved as `{stream}_{timestamp_ms}.npy`. With `--png`, left/right/rgb are saved as `.png`; with both `--png` and `--npy`, those streams are saved in both formats. Calibration and metadata are written in the same folder.
+Captures are saved under the output folder in subfolders named by device, optional capture name, and timestamp (e.g. `output/OAK-D_abc123_myrun_20250211120000/`). Each stream gets its own subfolder with one `{stream}_{timestamp_ms}.dai` file per frame. Calibration and metadata are written in the capture folder.
+
+To get plain `.npy`/`.png` files back out of a `.dai` capture, run `convert/convert_dai_frames_to_capture.py <capture_dir> [--png]`.
 
 ## Settings
 
-Edit `capture_settings.json` to configure the pipeline and capture.
+The pipeline/capture settings are embedded directly in `capture_data_stereo.py` as `DEFAULT_SETTINGS`, so the script runs standalone without any settings file. Pass `--settings path/to/file.json` to override them with a custom JSON file (same shape as `DEFAULT_SETTINGS`); `capture_settings.json` in this repo is kept as an example of that shape.
 
 - **num_captures**: Max frames per stream (`20`, or `"inf"` for unlimited).
 - **output_settings**: Enable/disable streams: `left`, `right`, `left_raw`, `right_raw`, `rgb`, `depth`, `disparity`; select `sync` for synchronized capture.
