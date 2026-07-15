@@ -9,7 +9,6 @@ Usage:
     python3 capture_data_tof_raw.py --ip 10.11.102.225
     python3 capture_data_tof_raw.py --ip 10.11.102.225 --num-frames 50
     python3 capture_data_tof_raw.py --ip 10.11.102.225 --capture-name my-scene
-    python3 capture_data_tof_raw.py --ip 10.11.102.225 --fwp /path/to/firmware.tar.xz
 
 Automatically saves after warmup. Press Ctrl+C to stop early.
 """
@@ -20,6 +19,8 @@ import json
 import os
 import subprocess
 import time
+
+os.environ["DEPTHAI_AUTOCALIBRATION"] = "OFF"
 
 import cv2
 import numpy as np
@@ -38,18 +39,17 @@ def parse_args():
     parser.add_argument("--socket", default="CAM_D", help="Camera board socket (default: CAM_D)")
     parser.add_argument("--preset", choices=["low", "mid", "high"], default="high",
                         help="ToF preset mode (default: high)")
-    parser.add_argument("--num-frames", type=int, default=16, dest="num_frames",
-                        help="Number of frames to capture (default: 16)")
+    parser.add_argument("--num-frames", type=int, default=32, dest="num_frames",
+                        help="Number of frames to capture (default: 32)")
     parser.add_argument("--capture-name", default=None, dest="capture_name",
                         help="Optional name for the capture folder")
     parser.add_argument("--output", default=root_path, help="Output root folder")
-    parser.add_argument("--fwp", required=True, help="Path to custom RVC4 firmware package (.tar.xz)")
     parser.add_argument("--show-streams", action="store_true", dest="show_streams",
                         help="Show live preview of streams in OpenCV windows")
     parser.add_argument("--skip-warmup", action="store_true", dest="skip_warmup",
                         help="Skip warmup frames")
-    parser.add_argument("--warmup-frames", type=int, default=30, dest="warmup_frames",
-                        help="Number of warmup frames to skip (default: 30)")
+    parser.add_argument("--warmup-frames", type=int, default=10, dest="warmup_frames",
+                        help="Number of warmup frames to skip (default: 10)")
     return parser.parse_args()
 
 
@@ -57,7 +57,7 @@ def initialize_capture_folder(output_root, device, capture_name):
     """Create output folder and save calibration + metadata."""
     date = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
     device_name = device.getDeviceName()
-    device_id = device.getMxId()
+    device_id = device.getDeviceId()
 
     if capture_name:
         name = capture_name.replace('_', '-')
@@ -113,13 +113,12 @@ def main():
 
     if args.ip:
         os.environ["DEPTHAI_DEVICE_NAME_LIST"] = args.ip
-    os.environ["DEPTHAI_DEVICE_RVC4_FWP"] = args.fwp
 
     socket = getattr(dai.CameraBoardSocket, args.socket)
     preset_map = {
-        "low": dai.ImageFiltersPresetMode.TOF_LOW_RANGE,
-        "mid": dai.ImageFiltersPresetMode.TOF_MID_RANGE,
-        "high": dai.ImageFiltersPresetMode.TOF_HIGH_RANGE,
+        "low": dai.ToFConfig.Profile.LOW_RANGE,
+        "mid": dai.ToFConfig.Profile.MID_RANGE,
+        "high": dai.ToFConfig.Profile.HIGH_RANGE,
     }
     preset_mode = preset_map[args.preset]
 
@@ -135,14 +134,14 @@ def main():
     print(f"[Device] Connected: {device_name} ({mxid})")
 
     with dai.Pipeline(device) as pipeline:
+        # ToFBase node (decoder) — build before the Camera node so it reserves the socket
+        tof_base = pipeline.create(dai.node.ToFBase)
+        tof_base.build(boardSocket=socket, profile=preset_mode)
+
         # ToF camera node
         cam = pipeline.create(dai.node.Camera)
         cam.setSensorType(dai.CameraSensorType.TOF)
-        cam.build(boardSocket=socket)
-
-        # ToFBase node (decoder)
-        tof_base = pipeline.create(dai.node.ToFBase)
-        tof_base.build(boardSocket=socket, presetMode=preset_mode)
+        cam.build(boardSocket=tof_base.getBoardSocket())
 
         # Link camera raw → ToF decoder
         cam.raw.link(tof_base.rawInput)
@@ -160,9 +159,11 @@ def main():
         rgb_out = cam_rgb.requestFullResolutionOutput()
 
         # Output queues
-        raw_q = tof_base.raw.createOutputQueue()
+        raw_q = cam.raw.createOutputQueue()
         depth_q = tof_base.depth.createOutputQueue()
         amp_q = tof_base.amplitude.createOutputQueue()
+        intensity_q = tof_base.intensity.createOutputQueue()
+        confidence_q = tof_base.confidence.createOutputQueue()
         left_q = left_out.createOutputQueue()
         right_q = right_out.createOutputQueue()
         rgb_q = rgb_out.createOutputQueue()
@@ -195,6 +196,12 @@ def main():
 
                 # Get amplitude
                 amp_frame = amp_q.tryGet()
+
+                # Get intensity
+                intensity_frame = intensity_q.tryGet()
+
+                # Get confidence
+                confidence_frame = confidence_q.tryGet()
 
                 # Get raw (passthrough)
                 raw_frame = raw_q.tryGet()
@@ -242,31 +249,40 @@ def main():
                     raw_timestamp = int(raw_frame.getTimestamp().total_seconds() * 1000)
 
                     if saving and num_captures < args.num_frames:
-                        if num_captures == 0:
-                            print("[Processing] Applying horizontal flip + 90° rotation to depth and amplitude")
-
                         # Save raw superframe
                         np.save(f'{output_folder}/raw_{raw_timestamp}.npy', raw_data)
 
-                        # Save depth (npy + colorized png) — mirrored vertically then rotated 90°
+                        # Save depth (npy + colorized png)
                         depth_data = depth_frame.getFrame()
-                        depth_data = np.flip(depth_data, axis=1)  # mirror along vertical axis
-                        depth_data = np.ascontiguousarray(np.rot90(depth_data))  # rotate 90°
                         depth_ts = int(depth_frame.getTimestamp().total_seconds() * 1000)
                         np.save(f'{output_folder}/depth_{depth_ts}.npy', depth_data)
                         depth_vis = (depth_data.astype(np.float32) / depth_data.max() * 255).astype(np.uint8) if depth_data.max() > 0 else np.zeros_like(depth_data, dtype=np.uint8)
                         depth_color = cv2.applyColorMap(depth_vis, cv2.COLORMAP_JET)
                         cv2.imwrite(f'{output_folder}/depth_color_{depth_ts}.png', depth_color)
 
-                        # Save amplitude (npy + greyscale png) — mirrored horizontally then rotated 90°
+                        # Save amplitude (npy + greyscale png)
                         if amp_frame is not None:
                             amp_data = amp_frame.getFrame()
-                            amp_data = np.flip(amp_data, axis=1)  # mirror along vertical axis
-                            amp_data = np.ascontiguousarray(np.rot90(amp_data))  # rotate 90°
                             amp_ts = int(amp_frame.getTimestamp().total_seconds() * 1000)
                             np.save(f'{output_folder}/amplitude_{amp_ts}.npy', amp_data)
                             amp_vis = (amp_data.astype(np.float32) / amp_data.max() * 255).astype(np.uint8) if amp_data.max() > 0 else np.zeros_like(amp_data, dtype=np.uint8)
                             cv2.imwrite(f'{output_folder}/amplitude_vis_{amp_ts}.png', amp_vis)
+
+                        # Save intensity (npy + greyscale png)
+                        if intensity_frame is not None:
+                            intensity_data = intensity_frame.getFrame()
+                            intensity_ts = int(intensity_frame.getTimestamp().total_seconds() * 1000)
+                            np.save(f'{output_folder}/intensity_{intensity_ts}.npy', intensity_data)
+                            intensity_vis = (intensity_data.astype(np.float32) / intensity_data.max() * 255).astype(np.uint8) if intensity_data.max() > 0 else np.zeros_like(intensity_data, dtype=np.uint8)
+                            cv2.imwrite(f'{output_folder}/intensity_vis_{intensity_ts}.png', intensity_vis)
+
+                        # Save confidence (npy + greyscale png)
+                        if confidence_frame is not None:
+                            confidence_data = confidence_frame.getFrame()
+                            confidence_ts = int(confidence_frame.getTimestamp().total_seconds() * 1000)
+                            np.save(f'{output_folder}/confidence_{confidence_ts}.npy', confidence_data)
+                            confidence_vis = (confidence_data.astype(np.float32) / confidence_data.max() * 255).astype(np.uint8) if confidence_data.max() > 0 else np.zeros_like(confidence_data, dtype=np.uint8)
+                            cv2.imwrite(f'{output_folder}/confidence_vis_{confidence_ts}.png', confidence_vis)
 
                         # Save left as PNG
                         if left_frame is not None:
@@ -317,6 +333,14 @@ def main():
                         d = depth_frame.getFrame()
                         dv = (d.astype(np.float32) / d.max() * 255).astype(np.uint8) if d.max() > 0 else np.zeros_like(d, dtype=np.uint8)
                         cv2.imshow("Depth", cv2.applyColorMap(dv, cv2.COLORMAP_JET))
+                    if intensity_frame is not None:
+                        i_data = intensity_frame.getFrame()
+                        iv = (i_data.astype(np.float32) / i_data.max() * 255).astype(np.uint8) if i_data.max() > 0 else np.zeros_like(i_data, dtype=np.uint8)
+                        cv2.imshow("Intensity", iv)
+                    if confidence_frame is not None:
+                        c_data = confidence_frame.getFrame()
+                        cv = (c_data.astype(np.float32) / c_data.max() * 255).astype(np.uint8) if c_data.max() > 0 else np.zeros_like(c_data, dtype=np.uint8)
+                        cv2.imshow("Confidence", cv)
                     key = cv2.waitKey(1) & 0xFF
                     if key == ord('q'):
                         pipeline.stop()
