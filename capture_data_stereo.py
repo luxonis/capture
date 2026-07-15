@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 
+import os
+
+os.environ["DEPTHAI_AUTOCALIBRATION"] = "OFF"
+
 import depthai as dai
 import numpy as np
 import time
 import json
 import cv2
-import os
 import argparse
 import queue
 import threading
