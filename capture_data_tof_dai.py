@@ -21,13 +21,17 @@ import datetime
 import json
 import os
 import queue
+import shutil
 import subprocess
 import threading
 import time
 
 os.environ["DEPTHAI_AUTOCALIBRATION"] = "OFF"
 
-import cv2
+try:
+    import cv2  # not available on-device; only needed for --show-streams
+except ImportError:
+    cv2 = None
 
 import depthai as dai
 
@@ -57,6 +61,14 @@ def parse_args():
     parser.add_argument("--rgb-resolution", default=None, dest="rgb_resolution",
                         help="RGB output resolution as WIDTHxHEIGHT (e.g. 1920x1080); "
                              "default is the sensor's full resolution")
+    parser.add_argument("--warmup-frames", type=int, default=10, dest="warmup_frames",
+                        help="Raw frames to discard before saving starts, so the saved "
+                             "sequence has no startup drops (default: 10)")
+    parser.add_argument("--ram-buffer", action="store_true", dest="ram_buffer",
+                        help="Hold all frames in RAM during capture and write them to disk "
+                             "only after the pipeline stops. Lets short captures run at full "
+                             "sensor FPS on storage-limited devices (~40 MB per frame-set with "
+                             "RGB; keep num-frames such that it fits in free RAM)")
     return parser.parse_args()
 
 
@@ -133,10 +145,18 @@ def resolve_device_ip(args):
     return None
 
 
+EEPROM_DEVICE_PATH = "/data/vendor/camera/eeprom_vd55h1.bin"
+
+
 def fetch_eeprom(ip, output_folder):
-    """SSH into device and copy eeprom_vd55h1.bin to the output folder."""
-    remote_path = f"root@{ip}:/data/vendor/camera/eeprom_vd55h1.bin"
+    """Copy eeprom_vd55h1.bin to the output folder (locally when running on-device, via SCP otherwise)."""
     local_path = os.path.join(output_folder, "eeprom_vd55h1.bin")
+    if os.path.exists(EEPROM_DEVICE_PATH):
+        # Running on the device itself — plain file copy.
+        shutil.copy(EEPROM_DEVICE_PATH, local_path)
+        print(f"[EEPROM] Copied {EEPROM_DEVICE_PATH} to {local_path}")
+        return
+    remote_path = f"root@{ip}:{EEPROM_DEVICE_PATH}"
     print(f"[SCP] Fetching eeprom_vd55h1.bin from {ip}...")
     try:
         subprocess.run(
@@ -154,7 +174,7 @@ def start_capture(args, device, eeprom_ip):
     """Create the capture folder and fetch the eeprom. Returns the output folder."""
     output_folder = initialize_capture_folder(args.output, device, args.capture_name)
     _create_stream_dirs(output_folder)
-    if eeprom_ip:
+    if eeprom_ip or os.path.exists(EEPROM_DEVICE_PATH):
         fetch_eeprom(eeprom_ip, output_folder)
     else:
         print("[SCP] WARNING: no device IP resolved, skipping eeprom fetch")
@@ -165,6 +185,22 @@ def _create_stream_dirs(output_folder):
     """Pre-create one subfolder per stream so the saver hot path does no dir checks."""
     for name in STREAM_NAMES:
         os.makedirs(f'{output_folder}/{name}', exist_ok=True)
+
+
+def _available_ram_bytes():
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) * 1024
+    except OSError:
+        pass
+    return None
+
+
+# Serialization overhead on top of raw frame bytes while buffering + flushing
+RAM_OVERHEAD_FACTOR = 1.4
+RAM_USE_FRACTION = 0.75  # never plan to occupy more than this share of MemAvailable
 
 
 def _saver_worker(save_queue):
@@ -186,6 +222,9 @@ def _saver_worker(save_queue):
 
 def main():
     args = parse_args()
+
+    if args.show_streams and cv2 is None:
+        raise SystemExit("--show-streams requires OpenCV (cv2), which is not installed")
 
     if args.ip:
         os.environ["DEPTHAI_DEVICE_NAME_LIST"] = args.ip
@@ -229,6 +268,10 @@ def main():
         cam_right = pipeline.create(dai.node.Camera).build(dai.CameraBoardSocket.CAM_C)
         right_out = cam_right.requestFullResolutionOutput()
 
+        # Deep enough that brief consumer stalls (GC, status prints) never drop
+        # frames within a capture window.
+        queue_depth = max(30, args.num_frames + args.warmup_frames + 5)
+
         # RGB camera (CAM_A) — optional
         rgb_q = None
         if not args.no_rgb:
@@ -237,12 +280,12 @@ def main():
                 rgb_out = cam_rgb.requestOutput(parse_resolution(args.rgb_resolution))
             else:
                 rgb_out = cam_rgb.requestFullResolutionOutput()
-            rgb_q = rgb_out.createOutputQueue()
+            rgb_q = rgb_out.createOutputQueue(maxSize=queue_depth, blocking=False)
 
         # Output queues
-        raw_q = cam.raw.createOutputQueue()
-        left_q = left_out.createOutputQueue()
-        right_q = right_out.createOutputQueue()
+        raw_q = cam.raw.createOutputQueue(maxSize=queue_depth, blocking=False)
+        left_q = left_out.createOutputQueue(maxSize=queue_depth, blocking=False)
+        right_q = right_out.createOutputQueue(maxSize=queue_depth, blocking=False)
 
         print("\n[Pipeline] Starting...")
         pipeline.start()
@@ -253,6 +296,15 @@ def main():
         frame_count = 0
         raw_count = 0
         t_start = time.monotonic()
+        # In --ram-buffer mode frames are collected here during capture and only
+        # enqueued for disk writes after the pipeline stops.
+        ram_frames = []
+
+        def enqueue_or_buffer(item):
+            if args.ram_buffer:
+                ram_frames.append(item)
+            else:
+                save_queue.put(item, block=True)
 
         if args.show_streams:
             print(f"\n[CONTROLS] Press 'S' to START capture, 'Q' to QUIT")
@@ -280,22 +332,36 @@ def main():
                     raw_count += 1
                     raw_ts = int(raw_frame.getTimestamp().total_seconds() * 1000)
 
-                    if saving and num_captures < args.num_frames:
-                        save_queue.put((output_folder, "tof_raw", raw_ts, raw_frame), block=True)
+                    if saving and raw_count <= args.warmup_frames:
+                        pass  # discard warmup frames so the saved sequence is gap-free
+                    elif saving and num_captures < args.num_frames:
+                        enqueue_or_buffer((output_folder, "tof_raw", raw_ts, raw_frame))
 
                         if left_frame is not None:
                             left_ts = int(left_frame.getTimestamp().total_seconds() * 1000)
-                            save_queue.put((output_folder, "left", left_ts, left_frame), block=True)
+                            enqueue_or_buffer((output_folder, "left", left_ts, left_frame))
 
                         if right_frame is not None:
                             right_ts = int(right_frame.getTimestamp().total_seconds() * 1000)
-                            save_queue.put((output_folder, "right", right_ts, right_frame), block=True)
+                            enqueue_or_buffer((output_folder, "right", right_ts, right_frame))
 
                         if rgb_frame is not None:
                             rgb_ts = int(rgb_frame.getTimestamp().total_seconds() * 1000)
-                            save_queue.put((output_folder, "rgb", rgb_ts, rgb_frame), block=True)
+                            enqueue_or_buffer((output_folder, "rgb", rgb_ts, rgb_frame))
 
                         num_captures += 1
+
+                        # After the first buffered set, clamp num_frames to what fits
+                        # in RAM instead of letting the OOM killer end the capture.
+                        if num_captures == 1 and args.ram_buffer:
+                            set_bytes = sum(len(m.getData()) for (_, _, _, m) in ram_frames)
+                            avail = _available_ram_bytes()
+                            if avail and set_bytes:
+                                safe_max = int(avail * RAM_USE_FRACTION / (set_bytes * RAM_OVERHEAD_FACTOR))
+                                if args.num_frames > safe_max:
+                                    print(f"[RAM] {args.num_frames} frames x {set_bytes / 1e6:.0f} MB/set won't fit "
+                                          f"in {avail / 1e9:.1f} GB available RAM; clamping to {safe_max} frames")
+                                    args.num_frames = safe_max
 
                         if num_captures >= args.num_frames:
                             end_time = time.time()
@@ -308,7 +374,7 @@ def main():
                 if frame_count % 10 == 1:
                     status = "CAPTURING" if saving else "IDLE"
                     print(
-                        f"[{frame_count:5d}] {status} | raw={raw_frame.getFrame().shape if raw_frame else None} "
+                        f"[{frame_count:5d}] {status} | raw={(raw_frame.getHeight(), raw_frame.getWidth()) if raw_frame else None} "
                         f"| raw_total={raw_count} saved={num_captures} FPS={fps:.1f}"
                     )
 
@@ -334,6 +400,15 @@ def main():
 
         except KeyboardInterrupt:
             print("\nInterrupted.")
+
+    if ram_frames:
+        print(f"[Flush] Writing {len(ram_frames)} RAM-buffered frames to disk...")
+        t_flush = time.monotonic()
+        for item in ram_frames:
+            save_queue.put(item, block=True)
+        ram_frames.clear()
+        save_queue.join()
+        print(f"[Flush] Done in {time.monotonic() - t_flush:.1f}s")
 
     for _ in saver_threads:
         save_queue.put(None)
