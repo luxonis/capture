@@ -34,9 +34,10 @@ echo "[1/3] Uploading device script..."
 ssh "$REMOTE" "mkdir -p /data/capture"
 scp -q "$SCRIPT_DIR/capture_stream_tof_dai.py" "$REMOTE:/data/capture/"
 
-echo "[2/3] Starting local receiver on $HOSTIP:$PORT ..."
-mkdir -p "$SCRIPT_DIR/output"
-python3 "$SCRIPT_DIR/stream_receiver.py" --port "$PORT" --output "$SCRIPT_DIR/output" &
+OUTPUT_DIR="${OUTPUT_DIR:-$SCRIPT_DIR/output}"
+echo "[2/3] Starting local receiver on $HOSTIP:$PORT (output: $OUTPUT_DIR) ..."
+mkdir -p "$OUTPUT_DIR"
+python3 "$SCRIPT_DIR/stream_receiver.py" --port "$PORT" --output "$OUTPUT_DIR" &
 RECV_PID=$!
 trap 'kill $RECV_PID 2>/dev/null || true' EXIT
 sleep 1
