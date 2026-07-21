@@ -100,7 +100,7 @@ def parse_args():
     parser.add_argument("--warmup-frames", type=int, default=10, dest="warmup_frames",
                         help="Raw frames to discard before capture starts (default: 10)")
     parser.add_argument("--zstd-level", type=int, default=1, dest="zstd_level",
-                        help="zstd compression level (default: 1)")
+                        help="zstd compression level; 0 = send uncompressed (default: 1)")
     parser.add_argument("--senders", type=int, default=3,
                         help="Parallel compress+send threads (default: 3)")
     parser.add_argument("--queue-items", type=int, default=100, dest="queue_items",
@@ -145,12 +145,19 @@ def latest(q):
         msg = m
 
 
-def connect(host, port, folder):
+def connect(host, port, folder, compressed):
     sock = socket.create_connection((host, port), timeout=15)
     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     nb = folder.encode()
-    sock.sendall(struct.pack("<H", len(nb)) + nb)
+    sock.sendall(struct.pack("<H", len(nb)) + nb + struct.pack("<B", 1 if compressed else 0))
     return sock
+
+
+def make_compressor(level):
+    """Return a bytes->bytes payload function; identity when level <= 0."""
+    if level <= 0:
+        return lambda data: data
+    return zstandard.ZstdCompressor(level=level).compress
 
 
 def send_record(sock, name, ts, raw_len, payload):
@@ -159,7 +166,7 @@ def send_record(sock, name, ts, raw_len, payload):
     sock.sendall(payload)
 
 
-def send_sidecars(sock, cctx, device, args, folder, date):
+def send_sidecars(sock, compress, device, args, folder, date):
     """Send calib/metadata/info/eeprom as file records over the control connection."""
     calib_tmp = f"{SHM_DIR}/calib.json"
     device.readCalibration().eepromToJsonFile(calib_tmp)
@@ -193,12 +200,12 @@ def send_sidecars(sock, cctx, device, args, folder, date):
             files["eeprom_vd55h1.bin"] = f.read()
 
     for relpath, data in files.items():
-        send_record(sock, f"file:{relpath}", 0, len(data), cctx.compress(data))
+        send_record(sock, f"file:{relpath}", 0, len(data), compress(data))
 
 
 def sender_worker(args, folder, work_q, stats, lock):
-    cctx = zstandard.ZstdCompressor(level=args.zstd_level)
-    sock = connect(args.host, args.port, folder)
+    compress = make_compressor(args.zstd_level)
+    sock = connect(args.host, args.port, folder, args.zstd_level > 0)
     tid = threading.get_ident()
     try:
         while True:
@@ -214,7 +221,7 @@ def sender_worker(args, folder, work_q, stats, lock):
                 with open(tmp + ".dai", "rb") as f:
                     data = f.read()
                 os.unlink(tmp + ".dai")
-                comp = cctx.compress(data)
+                comp = compress(data)
                 send_record(sock, name, ts, len(data), comp)
                 with lock:
                     stats["sent"] += 1
@@ -245,8 +252,8 @@ def main():
     print(f"[Stream] Receiver: {args.host}:{args.port}")
 
     # Control connection: sidecar files first so the receiver creates the folder
-    ctrl = connect(args.host, args.port, folder)
-    send_sidecars(ctrl, zstandard.ZstdCompressor(level=args.zstd_level), device, args, folder, date)
+    ctrl = connect(args.host, args.port, folder, args.zstd_level > 0)
+    send_sidecars(ctrl, make_compressor(args.zstd_level), device, args, folder, date)
     ctrl.close()
 
     work_q = queue.Queue(maxsize=args.queue_items)

@@ -35,6 +35,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REMOTE="root@${IP}"
 REMOTE_OUT="/data/captures"
 NAME="${CAPTURE_NAME:-burst}"
+# 8 GB dev units boot with half the RAM parked offline; re-online it if needed
+ssh "$REMOTE" "[ -x /data/online_ram.sh ] && [ \$(awk '/MemTotal/{print \$2}' /proc/meminfo) -lt 5000000 ] && { echo '[Setup] 4 GB mode detected, onlining parked RAM...'; /data/online_ram.sh; } || true"
+
 if [ -z "${RAM_THRESHOLD_MB:-}" ]; then
     RAM_THRESHOLD_MB=$(ssh "$REMOTE" "awk '/MemTotal/{printf \"%d\", \$2/1024*0.75}' /proc/meminfo")
     echo "[Setup] RAM threshold: ${RAM_THRESHOLD_MB} MB (75% of device MemTotal)"

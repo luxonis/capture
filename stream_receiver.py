@@ -40,6 +40,7 @@ def handle_connection(sock, output_root, stats, lock):
         return
     (folder_len,) = struct.unpack("<H", hdr)
     folder = recv_exact(sock, folder_len).decode()
+    (compressed,) = struct.unpack("<B", recv_exact(sock, 1))
     out_dir = os.path.join(output_root, os.path.basename(folder))
     os.makedirs(out_dir, exist_ok=True)
     with lock:
@@ -55,7 +56,7 @@ def handle_connection(sock, output_root, stats, lock):
         name = recv_exact(sock, name_len).decode()
         ts, raw_len, comp_len = struct.unpack("<QII", recv_exact(sock, 16))
         payload = recv_exact(sock, comp_len)
-        data = dctx.decompress(payload, max_output_size=raw_len)
+        data = dctx.decompress(payload, max_output_size=raw_len) if compressed else payload
 
         if name.startswith("file:"):
             relpath = os.path.basename(name[len("file:"):])
