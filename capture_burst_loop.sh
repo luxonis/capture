@@ -10,21 +10,35 @@
 # Folder names get a burst index suffix: <device>_<id>_<name>-001_<date>, ...
 # Set CAPTURE_NAME to change the base name (default: burst); don't pass
 # --capture-name in the extra args.
-# Set RAM_THRESHOLD_MB (default 2400) to tune how much MemAvailable is
-# required before the next burst starts.
+# Set RAM_THRESHOLD_MB to override how much MemAvailable is required before
+# the next burst starts (default: auto = 75% of the device's MemTotal, so it
+# adapts to whether the 8 GB unlock has been applied).
 # Set DELETE_ON_DEVICE=1 to remove each folder from the device after pulling.
 
 set -euo pipefail
 
-IP="${1:?usage: $0 <device-ip> <num-bursts> [capture args...]}"
+usage() {
+    sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
+    exit "${1:-0}"
+}
+[ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ] && usage 0
+[ -z "${1:-}" ] && usage 1
+
+IP="$1"
 COUNT="${2:?usage: $0 <device-ip> <num-bursts> [capture args...]}"
+case "$COUNT" in
+    ''|*[!0-9]*) echo "error: <num-bursts> must be a number, got '$COUNT'" >&2; echo >&2; usage 1;;
+esac
 shift 2
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REMOTE="root@${IP}"
 REMOTE_OUT="/data/captures"
 NAME="${CAPTURE_NAME:-burst}"
-RAM_THRESHOLD_MB="${RAM_THRESHOLD_MB:-2400}"
+if [ -z "${RAM_THRESHOLD_MB:-}" ]; then
+    RAM_THRESHOLD_MB=$(ssh "$REMOTE" "awk '/MemTotal/{printf \"%d\", \$2/1024*0.75}' /proc/meminfo")
+    echo "[Setup] RAM threshold: ${RAM_THRESHOLD_MB} MB (75% of device MemTotal)"
+fi
 
 echo "[Setup] Uploading capture script..."
 ssh "$REMOTE" "mkdir -p /data/capture $REMOTE_OUT"

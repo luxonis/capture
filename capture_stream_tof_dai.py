@@ -47,6 +47,43 @@ EEPROM_DEVICE_PATH = "/data/vendor/camera/eeprom_vd55h1.bin"
 SHM_DIR = "/dev/shm/tof_stream"
 
 
+class StatusLed:
+    """Device RGB status LED: red=capturing, green=draining, blue=idle (OS default)."""
+
+    LEDS = ("red", "green", "blue")
+
+    def __init__(self, enabled=True):
+        self.available = enabled and all(
+            os.path.isdir(f"/sys/class/leds/{c}") for c in self.LEDS)
+
+    def _write(self, color, attr, value):
+        try:
+            with open(f"/sys/class/leds/{color}/{attr}", "w") as f:
+                f.write(str(value))
+        except OSError:
+            pass
+
+    def _solid(self, red=0, green=0, blue=0):
+        if not self.available:
+            return
+        for color, value in zip(self.LEDS, (red, green, blue)):
+            self._write(color, "trigger", "none")
+            self._write(color, "brightness", value)
+
+    def capturing(self):
+        self._solid(red=255)
+
+    def flushing(self):
+        self._solid(green=255)
+
+    def restore(self):
+        if not self.available:
+            return
+        self._solid()
+        self._write("blue", "trigger", "timer")
+        self._write("blue", "brightness", 255)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Stream raw ToF superframes to a host receiver")
     parser.add_argument("--host", required=True, help="Receiver IP address (the host)")
@@ -68,7 +105,24 @@ def parse_args():
                         help="Parallel compress+send threads (default: 3)")
     parser.add_argument("--queue-items", type=int, default=100, dest="queue_items",
                         help="Max frames buffered in RAM awaiting send (default: 100)")
+    parser.add_argument("--ram-buffer", action="store_true", dest="ram_buffer",
+                        help="Hold the whole capture in RAM (guaranteed contiguous 30 fps), "
+                             "then send it over the network after the pipeline stops; "
+                             "num-frames is clamped to available RAM")
+    parser.add_argument("--no-led", action="store_true", dest="no_led",
+                        help="Do not drive the device status LED")
     return parser.parse_args()
+
+
+def available_ram_bytes():
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) * 1024
+    except OSError:
+        pass
+    return None
 
 
 def parse_resolution(value):
@@ -78,6 +132,17 @@ def parse_resolution(value):
     except (ValueError, AttributeError):
         raise argparse.ArgumentTypeError(
             f"invalid resolution '{value}', expected WIDTHxHEIGHT (e.g. 1920x1080)")
+
+
+def latest(q):
+    """Drain an output queue and return only the newest message (or None), so
+    side streams pair with the current raw frame instead of a stale backlog."""
+    msg = None
+    while True:
+        m = q.tryGet()
+        if m is None:
+            return msg
+        msg = m
 
 
 def connect(host, port, folder):
@@ -169,6 +234,10 @@ def main():
     device = dai.Device()
     print(f"[Device] Connected: {device.getDeviceName()} ({device.getDeviceId()})")
 
+    led = StatusLed(enabled=not args.no_led)
+    if led.available:
+        print("[LED] Status LED: red=capturing, green=sending, blue=idle")
+
     date = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
     name_part = f"_{args.capture_name.replace('_', '-')}" if args.capture_name else ""
     folder = f"{device.getDeviceName()}_{device.getDeviceId()}{name_part}_{date}"
@@ -197,7 +266,10 @@ def main():
 
         # Buffer budget lives in the dai queues + work_q; keep depths bounded so
         # long captures degrade to the sustained network rate instead of OOM.
-        raw_q = cam.raw.createOutputQueue(maxSize=32, blocking=False)
+        # In --ram-buffer mode the python list is the buffer and the loop drains
+        # fast, but deeper queues cheaply absorb any transient stall.
+        raw_depth = 64 if args.ram_buffer else 32
+        raw_q = cam.raw.createOutputQueue(maxSize=raw_depth, blocking=False)
         left_q = cam_left.requestFullResolutionOutput().createOutputQueue(maxSize=60, blocking=False)
         right_q = cam_right.requestFullResolutionOutput().createOutputQueue(maxSize=60, blocking=False)
         rgb_q = None
@@ -208,6 +280,16 @@ def main():
             else:
                 rgb_out = cam_rgb.requestFullResolutionOutput()
             rgb_q = rgb_out.createOutputQueue(maxSize=20, blocking=False)
+
+        # In --ram-buffer mode the dai queues must hold the entire capture window
+        # at sensor rate; frames are collected here and sent after the pipeline stops.
+        ram_frames = []
+
+        def enqueue(item):
+            if args.ram_buffer:
+                ram_frames.append(item)
+            else:
+                work_q.put(item, block=True)
 
         print("\n[Pipeline] Starting...")
         pipeline.start()
@@ -221,22 +303,34 @@ def main():
             while pipeline.isRunning() and num_captures < args.num_frames:
                 raw_frame = raw_q.get()
                 raw_count += 1
-                left_frame = left_q.tryGet()
-                right_frame = right_q.tryGet()
-                rgb_frame = rgb_q.tryGet() if rgb_q is not None else None
+                left_frame = latest(left_q)
+                right_frame = latest(right_q)
+                rgb_frame = latest(rgb_q) if rgb_q is not None else None
 
                 if raw_count <= args.warmup_frames:
                     continue
                 if t_first_saved is None:
                     t_first_saved = time.monotonic()
+                    led.capturing()
 
                 raw_ts = int(raw_frame.getTimestamp().total_seconds() * 1000)
-                work_q.put(("tof_raw", raw_ts, raw_frame), block=True)
+                enqueue(("tof_raw", raw_ts, raw_frame))
                 for name, frame in (("left", left_frame), ("right", right_frame), ("rgb", rgb_frame)):
                     if frame is not None:
                         ts = int(frame.getTimestamp().total_seconds() * 1000)
-                        work_q.put((name, ts, frame), block=True)
+                        enqueue((name, ts, frame))
                 num_captures += 1
+
+                # Clamp num_frames to available RAM after the first buffered set
+                if num_captures == 1 and args.ram_buffer:
+                    set_bytes = sum(len(m.getData()) for (_, _, m) in ram_frames)
+                    avail = available_ram_bytes()
+                    if avail and set_bytes:
+                        safe_max = int(avail * 0.75 / (set_bytes * 1.4))
+                        if args.num_frames > safe_max:
+                            print(f"[RAM] Clamping {args.num_frames} -> {safe_max} frames "
+                                  f"({set_bytes / 1e6:.0f} MB/set, {avail / 1e9:.1f} GB available)")
+                            args.num_frames = safe_max
 
                 if num_captures % 30 == 1:
                     el = time.monotonic() - t_first_saved
@@ -248,6 +342,16 @@ def main():
         capture_elapsed = time.monotonic() - (t_first_saved or t_start)
         pipeline.stop()
 
+    led.flushing()
+    if ram_frames:
+        print(f"[Send] Streaming {len(ram_frames)} RAM-buffered frames to host...")
+        t_send = time.monotonic()
+        for item in ram_frames:
+            work_q.put(item, block=True)
+        ram_frames.clear()
+        work_q.join()
+        print(f"[Send] Done in {time.monotonic() - t_send:.1f}s")
+
     print(f"[Capture] {num_captures} frame-sets in {capture_elapsed:.1f}s "
           f"({num_captures / capture_elapsed:.1f} fps), draining send queue...")
     work_q.join()
@@ -255,6 +359,7 @@ def main():
         work_q.put(None)
     for t in senders:
         t.join(timeout=120)
+    led.restore()
 
     total = time.monotonic() - t_start
     ratio = stats["raw_bytes"] / stats["comp_bytes"] if stats["comp_bytes"] else 0

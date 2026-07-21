@@ -64,6 +64,8 @@ def parse_args():
     parser.add_argument("--warmup-frames", type=int, default=10, dest="warmup_frames",
                         help="Raw frames to discard before saving starts, so the saved "
                              "sequence has no startup drops (default: 10)")
+    parser.add_argument("--no-led", action="store_true", dest="no_led",
+                        help="Do not drive the device status LED (red=capturing, green=flushing)")
     parser.add_argument("--ram-buffer", action="store_true", dest="ram_buffer",
                         help="Hold all frames in RAM during capture and write them to disk "
                              "only after the pipeline stops. Lets short captures run at full "
@@ -187,6 +189,47 @@ def _create_stream_dirs(output_folder):
         os.makedirs(f'{output_folder}/{name}', exist_ok=True)
 
 
+class StatusLed:
+    """Drive the device RGB status LED via sysfs (no-op when not available).
+
+    States: capturing = solid red, flushing = solid green,
+    done/exit = restore the OS default (blinking blue).
+    """
+
+    LEDS = ("red", "green", "blue")
+
+    def __init__(self, enabled=True):
+        self.available = enabled and all(
+            os.path.isdir(f"/sys/class/leds/{c}") for c in self.LEDS)
+
+    def _write(self, color, attr, value):
+        try:
+            with open(f"/sys/class/leds/{color}/{attr}", "w") as f:
+                f.write(str(value))
+        except OSError:
+            pass
+
+    def _solid(self, red=0, green=0, blue=0):
+        if not self.available:
+            return
+        for color, value in zip(self.LEDS, (red, green, blue)):
+            self._write(color, "trigger", "none")
+            self._write(color, "brightness", value)
+
+    def capturing(self):
+        self._solid(red=255)
+
+    def flushing(self):
+        self._solid(green=255)
+
+    def restore(self):
+        if not self.available:
+            return
+        self._solid()
+        self._write("blue", "trigger", "timer")
+        self._write("blue", "brightness", 255)
+
+
 def _available_ram_bytes():
     try:
         with open("/proc/meminfo") as f:
@@ -201,6 +244,22 @@ def _available_ram_bytes():
 # Serialization overhead on top of raw frame bytes while buffering + flushing
 RAM_OVERHEAD_FACTOR = 1.4
 RAM_USE_FRACTION = 0.75  # never plan to occupy more than this share of MemAvailable
+
+
+def latest(q):
+    """Drain an output queue and return only the newest message (or None).
+
+    The side streams are paired with the current raw frame, so older queued
+    frames are stale — returning the oldest (plain tryGet) pairs each raw
+    frame with a side frame lagging by however many frames queued up during
+    ToF warmup.
+    """
+    msg = None
+    while True:
+        m = q.tryGet()
+        if m is None:
+            return msg
+        msg = m
 
 
 def _saver_worker(save_queue):
@@ -245,6 +304,10 @@ def main():
     mxid = device.getDeviceId()
     device_name = device.getDeviceName()
     print(f"[Device] Connected: {device_name} ({mxid})")
+
+    led = StatusLed(enabled=not args.no_led)
+    if led.available:
+        print("[LED] Status LED: red=capturing, green=flushing, blue=idle")
 
     save_queue = queue.Queue(maxsize=SAVE_QUEUE_MAXSIZE)
     saver_threads = [
@@ -313,6 +376,7 @@ def main():
             print(f"\n[Capture] Saving {args.num_frames} frames immediately.")
             output_folder = start_capture(args, device, eeprom_ip)
             saving = True
+            led.capturing()
             start_time = time.time()
 
         try:
@@ -324,9 +388,9 @@ def main():
                 elapsed = time.monotonic() - t_start
                 fps = frame_count / elapsed if elapsed > 0 else 0
 
-                left_frame = left_q.tryGet()
-                right_frame = right_q.tryGet()
-                rgb_frame = rgb_q.tryGet() if rgb_q is not None else None
+                left_frame = latest(left_q)
+                right_frame = latest(right_q)
+                rgb_frame = latest(rgb_q) if rgb_q is not None else None
 
                 if raw_frame is not None:
                     raw_count += 1
@@ -394,6 +458,7 @@ def main():
                         if not saving:
                             output_folder = start_capture(args, device, eeprom_ip)
                             saving = True
+                            led.capturing()
                             start_time = time.time()
                             num_captures = 0
                             print(f"\n[STATUS] >>> CAPTURING {args.num_frames} frames... <<<")
@@ -401,6 +466,7 @@ def main():
         except KeyboardInterrupt:
             print("\nInterrupted.")
 
+    led.flushing()
     if ram_frames:
         print(f"[Flush] Writing {len(ram_frames)} RAM-buffered frames to disk...")
         t_flush = time.monotonic()
@@ -416,6 +482,7 @@ def main():
         t.join(timeout=60)
     if any(t.is_alive() for t in saver_threads):
         print("[Capture] Warning: saver thread(s) did not finish in time")
+    led.restore()
 
     total = time.monotonic() - t_start
     print(f"\n=== Summary ===")
