@@ -2,32 +2,44 @@ import depthai as dai
 from stereo import setup_stereo
 from metadata_extraction import extract_stereo_settings_from_node
 
+# Which streams the pipeline exposes. Not user-configurable; edit directly to change.
+OUTPUT_SETTINGS = {
+    "left": True,
+    "left_raw": False,
+    "right": True,
+    "right_raw": False,
+    "rgb": True,
+    "depth": True,
+    "disparity": False,
+    "hw_sync": False,
+    "sync": True
+}
 
-def initialize_pipeline(pipeline, settings):
+SYNC_ON_HOST = False
+
+
+def initialize_pipeline(pipeline, stereo_resolution, rgb_resolution, fps):
     def configure_cam(cam, size_x: int, size_y: int, fps: float):
         cap = dai.ImgFrameCapability()
         cap.size.fixed((size_x, size_y))
         cap.fps.fixed(fps)
         return cam.requestOutput(cap, True)
-    
+
     queues = {}
     input_queues = {}
-    output_settings = settings["output_settings"]
+    output_settings = OUTPUT_SETTINGS
 
     if output_settings["left"]:
         monoLeft = pipeline.create(dai.node.Camera).build(dai.CameraBoardSocket.CAM_B)
-        monoLeftOut = configure_cam(monoLeft, settings["stereoResolution"]["x"], 
-                                   settings["stereoResolution"]["y"], settings["FPS"])
+        monoLeftOut = configure_cam(monoLeft, stereo_resolution["x"], stereo_resolution["y"], fps)
 
     if output_settings["right"]:
         monoRight = pipeline.create(dai.node.Camera).build(dai.CameraBoardSocket.CAM_C)
-        monoRightOut = configure_cam(monoRight, settings["stereoResolution"]["x"], 
-                                    settings["stereoResolution"]["y"], settings["FPS"])
+        monoRightOut = configure_cam(monoRight, stereo_resolution["x"], stereo_resolution["y"], fps)
 
     if output_settings["rgb"]:
         color = pipeline.create(dai.node.Camera).build(dai.CameraBoardSocket.CAM_A)
-        colorOut = configure_cam(color, settings["rgbResolution"]["x"], 
-                               settings["rgbResolution"]["y"], settings["FPS"])
+        colorOut = configure_cam(color, rgb_resolution["x"], rgb_resolution["y"], fps)
 
     if output_settings["left"] or output_settings["left_raw"]: 
         input_queues["left_input_control"] = monoLeft.inputControl.createInputQueue()
@@ -37,14 +49,14 @@ def initialize_pipeline(pipeline, settings):
     stereo_settings = None
     if output_settings.get('hw_sync', False) or output_settings["depth"] or output_settings["disparity"]:
         platform = pipeline.getDefaultDevice().getPlatform()
-        stereo = setup_stereo(pipeline, settings, platform)
+        stereo = setup_stereo(pipeline, platform)
         stereo_settings = extract_stereo_settings_from_node(stereo)
         monoLeftOut.link(stereo.left)
         monoRightOut.link(stereo.right)
 
     if output_settings["sync"]:
         sync = pipeline.create(dai.node.Sync)
-        sync.setRunOnHost(settings['sync_on_host'])
+        sync.setRunOnHost(SYNC_ON_HOST)
 
         if output_settings.get('hw_sync', False) or output_settings["depth"] or output_settings["disparity"]:
             stereo.syncedLeft.link(sync.inputs["left"])
