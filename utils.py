@@ -26,33 +26,22 @@ def unpackRaw10(rawData, width, height, stride=None):
     if len(rawData) < expectedSize:
         raise ValueError(f"Data too small: {len(rawData)} bytes, expected {expectedSize}")
 
-    packedData = np.frombuffer(rawData, dtype=np.uint8)
+    numGroups = (width + 3) // 4
+    rowBytes = numGroups * 5
+    if stride < rowBytes:
+        raise ValueError(f"Stride too small: {stride} bytes, need {rowBytes} for width {width}")
 
-    result = np.zeros((height, width), dtype=np.uint16)
+    # Each group of 5 bytes holds 4 pixels: 4 high bytes plus one byte of
+    # low bits, 2 per pixel. Unpack every row at once.
+    packedData = np.frombuffer(rawData, dtype=np.uint8, count=expectedSize)
+    groups = packedData.reshape(height, stride)[:, :rowBytes].reshape(height, numGroups, 5)
 
-    for row in range(height):
-        rowStart = row * stride
-        rowData = packedData[rowStart:rowStart + stride]
-        numGroups = (width + 3) // 4
-        rowBytes = numGroups * 5
-        if len(rowData) < rowBytes:
-            break
+    unpacked = np.empty((height, numGroups, 4), dtype=np.uint16)
+    lowBits = groups[:, :, 4]
+    for i in range(4):
+        unpacked[:, :, i] = (groups[:, :, i].astype(np.uint16) << 2) | ((lowBits >> (2 * i)) & 0b11)
 
-        rowPacked = rowData[:rowBytes].reshape(-1, 5)
-        rowUnpacked = np.zeros((rowPacked.shape[0], 4), dtype=np.uint16)
-
-        rowUnpacked[:, 0] = rowPacked[:, 0].astype(np.uint16) << 2
-        rowUnpacked[:, 1] = rowPacked[:, 1].astype(np.uint16) << 2
-        rowUnpacked[:, 2] = rowPacked[:, 2].astype(np.uint16) << 2
-        rowUnpacked[:, 3] = rowPacked[:, 3].astype(np.uint16) << 2
-
-        rowUnpacked[:, 0] |= (rowPacked[:, 4] & 0b00000011)
-        rowUnpacked[:, 1] |= (rowPacked[:, 4] & 0b00001100) >> 2
-        rowUnpacked[:, 2] |= (rowPacked[:, 4] & 0b00110000) >> 4
-        rowUnpacked[:, 3] |= (rowPacked[:, 4] & 0b11000000) >> 6
-
-        rowFlat = rowUnpacked.flatten()
-        result[row, :width] = rowFlat[:width]
+    result = unpacked.reshape(height, numGroups * 4)[:, :width]
 
     result16bit = (result * 64).astype(np.uint16)
     return result16bit
@@ -161,7 +150,7 @@ def show_stream(name, frame, timestamp, mxid, is_capturing=False, num_captures=0
 def create_and_save_metadata(device, settings, output_dir, capture_name, date,
                             capture_type=None, author=None, notes=None, stereo_settings=None):
     model_name = device.getDeviceName()
-    mxId = device.getMxId()
+    device_id = device.getDeviceId()
     platform = device.getPlatform().name
     try:
         os_version = device.getOSVersion()
@@ -169,7 +158,7 @@ def create_and_save_metadata(device, settings, output_dir, capture_name, date,
         os_version = None
     metadata = {
         "model_name": model_name,
-        "mxId": mxId,
+        "mxId": device_id,
         "dai_version": dai.__version__,
         "platform": platform,
         "os_version": os_version,
@@ -197,7 +186,7 @@ def create_and_save_metadata(device, settings, output_dir, capture_name, date,
 def initialize_capture(root_path, device, settings, capture_name=None, projector=None, stereo_settings=None):
     date = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
     device_name = device.getDeviceName()
-    device_id = device.getMxId()
+    device_id = device.getDeviceId()
 
     if capture_name:
         base_name = f"{device_name}_{device_id}_{capture_name}_{date}"
@@ -209,14 +198,11 @@ def initialize_capture(root_path, device, settings, capture_name=None, projector
     else:
         out_dir = f"{root_path}/{base_name}_{projector}"
 
-    if not os.path.exists(root_path):
-        os.makedirs(root_path)
-
-    if not os.path.exists(os.path.join(root_path, out_dir)):
+    if os.path.exists(out_dir):
+        print(f"[Capture] Folder '{out_dir}' already exists.")
+    else:
         os.makedirs(out_dir)
         print(f"[Capture] Folder '{out_dir}' created.")
-    else:
-        print(f"[Capture] Folder '{out_dir}' already exists.")
 
     calib = device.readCalibration()
     calib.eepromToJsonFile(f'{out_dir}/calib.json')
@@ -226,9 +212,13 @@ def initialize_capture(root_path, device, settings, capture_name=None, projector
 
 
 def finalise_capture(start_time, end_time, num_captures, streams):
-    print(f"[Capture] Capture took {end_time - start_time:.2f} seconds.")
+    duration = end_time - start_time
+    print(f"[Capture] Capture took {duration:.2f} seconds.")
     print(f"[Capture] Capture has {num_captures} frames combined from all streams")
-    print(f"[Capture] Capture was {round((num_captures/len(streams)) / (end_time - start_time), 2)} FPS")
+    if duration > 0 and streams:
+        print(f"[Capture] Capture was {round((num_captures / len(streams)) / duration, 2)} FPS")
+    else:
+        print("[Capture] Capture was too short to measure FPS")
 
 
 def count_output_streams(output_streams):
